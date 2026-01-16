@@ -4,10 +4,10 @@ import { Button } from "@/components/ui/button";
 import { useNavigate } from "react-router-dom";
 
 const suggestedQuestions = [
-  "¿Cuál es nuestra política de reembolsos?",
-  "¿Cómo configuro la integración con Salesforce?",
-  "¿Cuáles son los pasos para el onboarding?",
-  "¿Dónde encuentro los manuales de producto?",
+  "¿Cuántos documentos hay actualmente?",
+  "¿Qué información puedo consultar?",
+  "¿Cómo funciona el sistema de búsqueda?",
+  "¿Qué tipos de documentos están disponibles?",
 ];
 
 export function SearchHero() {

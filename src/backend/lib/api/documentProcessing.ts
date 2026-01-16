@@ -75,6 +75,187 @@ function isLikelyStructuralChunk(chunk: string): boolean {
 }
 
 /**
+ * Procesa un documento específico: extrae texto, crea chunks y genera embeddings
+ * @param documentId - ID del documento a procesar
+ * @param onProgress - Callback opcional para reportar progreso (0-100)
+ * @returns true si se procesó correctamente, false en caso contrario
+ */
+export async function processDocument(
+  documentId: string,
+  onProgress?: (progress: number) => void
+): Promise<boolean> {
+  try {
+    if (!openai) {
+      console.warn('OpenAI no está configurado, no se pueden procesar documentos');
+      return false;
+    }
+
+    // 1. Obtener el documento
+    const { data: doc, error: docError } = await supabase
+      .from('documents')
+      .select('id, file_name, storage_path')
+      .eq('id', documentId)
+      .single();
+
+    if (docError || !doc) {
+      console.error(`Error obteniendo documento ${documentId}:`, docError);
+      return false;
+    }
+
+    // 2. Verificar si ya tiene chunks
+    const { data: existingChunks } = await supabase
+      .from('document_chunks')
+      .select('id')
+      .eq('document_id', documentId)
+      .limit(1);
+
+    if (existingChunks && existingChunks.length > 0) {
+      console.log(`Documento ${doc.file_name} ya tiene chunks procesados`);
+      onProgress?.(100);
+      return true;
+    }
+
+    onProgress?.(10);
+
+    // 3. Obtener el archivo de Storage
+    const fileExt = doc.file_name.split('.').pop()?.toLowerCase();
+    
+    if (!['txt', 'pdf', 'md'].includes(fileExt || '')) {
+      console.log(`Saltando ${doc.file_name}: formato ${fileExt} no soportado`);
+      return false;
+    }
+
+    const filePath = doc.storage_path || `documents/${doc.file_name}`;
+    onProgress?.(20);
+
+    // Obtener el contenido del archivo
+    const { data: fileData, error: downloadError } = await supabase.storage
+      .from('documents')
+      .download(filePath);
+
+    if (downloadError || !fileData) {
+      console.warn(`Error descargando ${doc.file_name}:`, downloadError);
+      return false;
+    }
+
+    onProgress?.(30);
+
+    // 4. Extraer texto según el tipo de archivo
+    let text: string = '';
+    
+    try {
+      if (fileExt === 'pdf') {
+        console.log(`Procesando PDF: ${doc.file_name}`);
+        const arrayBuffer = await fileData.arrayBuffer();
+        
+        const loadingTask = pdfjsLib.getDocument({ data: arrayBuffer });
+        const pdfDocument = await loadingTask.promise;
+        
+        console.log(`PDF tiene ${pdfDocument.numPages} página(s)`);
+        
+        const textParts: string[] = [];
+        for (let pageNum = 1; pageNum <= pdfDocument.numPages; pageNum++) {
+          const page = await pdfDocument.getPage(pageNum);
+          const textContent = await page.getTextContent();
+          const pageText = textContent.items
+            .map((item: any) => item.str)
+            .join(' ');
+          textParts.push(pageText);
+        }
+        
+        text = textParts.join('\n\n');
+      } else if (fileExt === 'md' || fileExt === 'txt') {
+        text = await fileData.text();
+      }
+
+      if (!text || text.trim().length === 0) {
+        console.warn(`El archivo ${doc.file_name} está vacío o no se pudo extraer texto`);
+        return false;
+      }
+
+      console.log(`✓ Texto extraído de ${doc.file_name}: ${text.length} caracteres`);
+    } catch (extractionError) {
+      console.error(`Error extrayendo texto de ${doc.file_name}:`, extractionError);
+      return false;
+    }
+
+    onProgress?.(50);
+
+    // 5. Dividir en chunks inteligentemente
+    const chunks = splitIntoChunks(text, 1200, 200);
+
+    // Filtrar chunks estructurales
+    const semanticChunks = chunks.filter(chunk => !isLikelyStructuralChunk(chunk));
+    const skippedChunks = chunks.length - semanticChunks.length;
+
+    if (skippedChunks > 0) {
+      console.log(`ⓘ Chunks descartados por estructurales para "${doc.file_name}": ${skippedChunks}/${chunks.length}`);
+    }
+
+    if (semanticChunks.length === 0) {
+      console.warn(`⚠️ Todos los chunks de "${doc.file_name}" parecen estructurales. Se omite generación de embeddings.`);
+      return true; // No es un error, simplemente no hay contenido semántico
+    }
+
+    onProgress?.(60);
+
+    // 6. Generar embeddings y guardar chunks
+    const totalChunks = semanticChunks.length;
+    for (let i = 0; i < semanticChunks.length; i++) {
+      const chunk = semanticChunks[i];
+      
+      try {
+        // Generar embedding
+        const embeddingResponse = await openai.embeddings.create({
+          model: 'text-embedding-3-small',
+          input: chunk,
+        });
+
+        const embedding = embeddingResponse.data[0].embedding;
+
+        // Guardar chunk en la base de datos
+        const { error: insertError } = await supabase
+          .from('document_chunks')
+          .insert({
+            document_id: doc.id,
+            chunk_index: i,
+            content: chunk,
+            embedding: embedding,
+          });
+
+        if (insertError) {
+          console.error(`❌ Error guardando chunk ${i + 1}/${totalChunks} de ${doc.file_name}:`, insertError);
+        }
+
+        // Actualizar progreso
+        const progress = 60 + Math.floor((i + 1) / totalChunks * 35);
+        onProgress?.(progress);
+      } catch (chunkError) {
+        console.error(`Error procesando chunk ${i} de ${doc.file_name}:`, chunkError);
+      }
+    }
+
+    onProgress?.(95);
+
+    // 7. Verificar que los chunks se guardaron correctamente
+    const { count: chunksCount } = await supabase
+      .from('document_chunks')
+      .select('*', { count: 'exact', head: true })
+      .eq('document_id', doc.id)
+      .not('embedding', 'is', null);
+    
+    console.log(`✓✓✓ Documento "${doc.file_name}" procesado exitosamente:`);
+    console.log(`   → Chunks con embeddings guardados: ${chunksCount || 0}`);
+
+    onProgress?.(100);
+    return true;
+  } catch (error) {
+    console.error(`Error procesando documento ${documentId}:`, error);
+    return false;
+  }
+}
+
+/**
  * Procesa documentos automáticamente: extrae texto, crea chunks y genera embeddings
  * Soporta archivos TXT, PDF y Markdown (.md)
  */

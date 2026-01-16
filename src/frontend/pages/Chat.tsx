@@ -9,14 +9,14 @@ import {
   Bot,
   User,
   FileText,
-  ThumbsUp,
-  ThumbsDown,
   Copy,
   RefreshCw,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { queryChat } from "@backend/lib/api/chat";
 import { useToast } from "@/hooks/use-toast";
+import { hasDocumentsProcessing } from "@backend/lib/api/documents";
+import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import type { ChatMessage } from "@backend/lib/api/chat";
 
 interface Message extends ChatMessage {
@@ -32,6 +32,7 @@ export default function Chat() {
   const [messages, setMessages] = useState<Message[]>([]);
   const [input, setInput] = useState(initialQuery);
   const [isTyping, setIsTyping] = useState(false);
+  const [showProcessingDialog, setShowProcessingDialog] = useState(false);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const { toast } = useToast();
   const isInitialLoad = useRef(true);
@@ -95,6 +96,13 @@ export default function Chat() {
     const text = messageText || input;
     if (!text.trim()) return;
 
+    // Verificar si hay documentos en proceso
+    const isProcessing = await hasDocumentsProcessing();
+    if (isProcessing) {
+      setShowProcessingDialog(true);
+      return;
+    }
+
     const userMessage: Message = {
       id: Date.now().toString(),
       role: "user",
@@ -157,6 +165,91 @@ export default function Chat() {
       sessionStorage.removeItem(STORAGE_KEY);
     } catch (error) {
       console.error('Error clearing sessionStorage:', error);
+    }
+  };
+
+  const handleCopyMessage = async (content: string) => {
+    try {
+      await navigator.clipboard.writeText(content);
+      toast({
+        title: "Copiado",
+        description: "El mensaje se ha copiado al portapapeles.",
+      });
+    } catch (error) {
+      console.error('Error copying to clipboard:', error);
+      toast({
+        title: "Error",
+        description: "No se pudo copiar el mensaje.",
+        variant: "destructive",
+      });
+    }
+  };
+
+  const handleRefreshMessage = async (messageId: string) => {
+    // Encontrar el mensaje actual y el último mensaje del usuario antes de él
+    const messageIndex = messages.findIndex(msg => msg.id === messageId);
+    if (messageIndex === -1) return;
+
+    // Buscar el último mensaje del usuario antes de este mensaje
+    let lastUserMessage: Message | null = null;
+    for (let i = messageIndex - 1; i >= 0; i--) {
+      if (messages[i].role === 'user') {
+        lastUserMessage = messages[i];
+        break;
+      }
+    }
+
+    if (!lastUserMessage) {
+      toast({
+        title: "Error",
+        description: "No se encontró la pregunta original para regenerar.",
+        variant: "destructive",
+      });
+      return;
+    }
+
+    // Verificar si hay documentos en proceso
+    const isProcessing = await hasDocumentsProcessing();
+    if (isProcessing) {
+      setShowProcessingDialog(true);
+      return;
+    }
+
+    // Remover el mensaje actual y todos los mensajes después de él
+    setMessages((prev) => prev.slice(0, messageIndex));
+    setIsTyping(true);
+
+    try {
+      // Obtener el historial de conversación hasta antes del mensaje a regenerar
+      const conversationHistory: ChatMessage[] = messages
+        .slice(0, messageIndex - 1)
+        .map((msg) => ({
+          role: msg.role,
+          content: msg.content,
+          sources: msg.sources,
+        }));
+
+      // Llamar a la API de chat con la pregunta original
+      const response = await queryChat(lastUserMessage.content, conversationHistory);
+
+      const aiMessage: Message = {
+        id: Date.now().toString(),
+        role: "assistant",
+        content: response.answer,
+        sources: response.sources,
+        timestamp: new Date(),
+      };
+
+      setMessages((prev) => [...prev, aiMessage]);
+    } catch (error) {
+      console.error('Error refreshing message:', error);
+      toast({
+        title: "Error al regenerar",
+        description: "No se pudo regenerar la respuesta. Por favor, intenta de nuevo.",
+        variant: "destructive",
+      });
+    } finally {
+      setIsTyping(false);
     }
   };
 
@@ -246,16 +339,23 @@ export default function Chat() {
                   {/* Actions for AI messages */}
                   {message.role === "assistant" && (
                     <div className="flex items-center gap-2 mt-4 pt-2">
-                      <Button variant="ghost" size="sm" className="h-7 px-2">
-                        <ThumbsUp className="h-3 w-3" />
-                      </Button>
-                      <Button variant="ghost" size="sm" className="h-7 px-2">
-                        <ThumbsDown className="h-3 w-3" />
-                      </Button>
-                      <Button variant="ghost" size="sm" className="h-7 px-2">
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        className="h-7 px-2"
+                        onClick={() => handleCopyMessage(message.content)}
+                        title="Copiar mensaje"
+                      >
                         <Copy className="h-3 w-3" />
                       </Button>
-                      <Button variant="ghost" size="sm" className="h-7 px-2">
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        className="h-7 px-2"
+                        onClick={() => handleRefreshMessage(message.id)}
+                        disabled={isTyping}
+                        title="Regenerar respuesta"
+                      >
                         <RefreshCw className="h-3 w-3" />
                       </Button>
                     </div>
@@ -320,6 +420,23 @@ export default function Chat() {
             </form>
           </div>
         </Card>
+
+        {/* Dialog para documentos en proceso */}
+        <Dialog open={showProcessingDialog} onOpenChange={setShowProcessingDialog}>
+          <DialogContent>
+            <DialogHeader>
+              <DialogTitle>Documentos en proceso</DialogTitle>
+              <DialogDescription>
+                Espera hasta que todos los documentos en proceso se suban y procesen antes de hacer preguntas.
+              </DialogDescription>
+            </DialogHeader>
+            <div className="flex justify-end gap-2 mt-4">
+              <Button variant="outline" onClick={() => setShowProcessingDialog(false)}>
+                Entendido
+              </Button>
+            </div>
+          </DialogContent>
+        </Dialog>
       </div>
     </AppLayout>
   );

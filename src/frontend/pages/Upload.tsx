@@ -170,9 +170,9 @@ export default function UploadPage() {
     );
 
     try {
-      // Simular progreso de subida
-      for (let i = 0; i <= 80; i += 20) {
-        await new Promise((resolve) => setTimeout(resolve, 200));
+      // Simular progreso de subida (0-30%)
+      for (let i = 0; i <= 30; i += 10) {
+        await new Promise((resolve) => setTimeout(resolve, 150));
         setFiles((prev) =>
           prev.map((f) =>
             f.id === fileUpload.id ? { ...f, progress: i } : f
@@ -183,10 +183,11 @@ export default function UploadPage() {
       // Update to processing
       setFiles((prev) =>
         prev.map((f) =>
-          f.id === fileUpload.id ? { ...f, status: "processing", progress: 80 } : f)
+          f.id === fileUpload.id ? { ...f, status: "processing", progress: 30 } : f)
       );
 
-      // Subir documento a Supabase
+      // Subir documento a Supabase (esto ahora también procesa los chunks)
+      // El procesamiento se hace dentro de uploadDocument
       await uploadDocument(
         fileUpload.file,
         fileUpload.departmentId,
@@ -201,8 +202,8 @@ export default function UploadPage() {
       );
 
       toast({
-        title: "Documento subido",
-        description: `${fileUpload.file.name} ha sido subido correctamente.`,
+        title: "Documento procesado",
+        description: `${fileUpload.file.name} ha sido subido y procesado correctamente.`,
       });
     } catch (error) {
       console.error('Error uploading file:', error);
@@ -212,8 +213,8 @@ export default function UploadPage() {
         )
       );
       toast({
-        title: "Error al subir",
-        description: `No se pudo subir ${fileUpload.file.name}. Por favor, intenta de nuevo.`,
+        title: "Error al procesar",
+        description: `No se pudo procesar ${fileUpload.file.name}. Por favor, intenta de nuevo.`,
         variant: "destructive",
       });
     }
@@ -233,7 +234,7 @@ export default function UploadPage() {
       return;
     }
 
-    // Subir archivos uno por uno
+    // Subir y procesar archivos uno por uno en orden
     for (const file of pendingFiles) {
       await uploadFile(file);
     }

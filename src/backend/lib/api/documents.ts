@@ -1,4 +1,5 @@
 import { supabase } from '../supabase';
+import { processDocument } from './documentProcessing';
 
 export interface Document {
   id: string;
@@ -81,14 +82,14 @@ export async function uploadDocument(
       throw uploadError;
     }
 
-    // 2. Crear registro en la tabla documents (guardar también el path del archivo)
+    // 2. Crear registro en la tabla documents con status 'processing'
     const { data: documentData, error: insertError } = await supabase
       .from('documents')
       .insert({
         file_name: file.name,
         department_id: departmentId,
         uploader_id: uploaderId,
-        status: 'processed',
+        status: 'processing', // Cambiar a 'processing' mientras se procesa
         storage_path: filePath, // Guardar el path del archivo en Storage
       })
       .select(`
@@ -107,12 +108,55 @@ export async function uploadDocument(
       throw insertError;
     }
 
+    // 3. Procesar el documento (extraer texto, crear chunks, generar embeddings)
+    try {
+      const processed = await processDocument(documentData.id);
+      
+      if (processed) {
+        // Actualizar estado a 'processed' si se procesó correctamente
+        await updateDocumentStatus(documentData.id, 'processed');
+      } else {
+        // Si falla el procesamiento, marcar como error
+        await updateDocumentStatus(documentData.id, 'error');
+        throw new Error('Error al procesar el documento');
+      }
+    } catch (processError) {
+      console.error('Error processing document:', processError);
+      await updateDocumentStatus(documentData.id, 'error');
+      throw processError;
+    }
+
+    // 4. Obtener el documento actualizado
+    const { data: updatedDocument, error: fetchError } = await supabase
+      .from('documents')
+      .select(`
+        *,
+        departments (
+          id,
+          name
+        )
+      `)
+      .eq('id', documentData.id)
+      .single();
+
+    if (fetchError || !updatedDocument) {
+      // Si falla obtener el documento actualizado, retornar el original
+      return {
+        ...documentData,
+        status: 'processed' as const,
+        department: documentData.departments ? {
+          id: documentData.departments.id,
+          name: documentData.departments.name,
+        } : undefined,
+      };
+    }
+
     // Mapear los datos para que department sea un objeto anidado
     return {
-      ...documentData,
-      department: documentData.departments ? {
-        id: documentData.departments.id,
-        name: documentData.departments.name,
+      ...updatedDocument,
+      department: updatedDocument.departments ? {
+        id: updatedDocument.departments.id,
+        name: updatedDocument.departments.name,
       } : undefined,
     };
   } catch (error) {
@@ -141,6 +185,28 @@ export async function updateDocumentStatus(
   } catch (error) {
     console.error('Error in updateDocumentStatus:', error);
     throw error;
+  }
+}
+
+/**
+ * Verifica si hay documentos en proceso
+ */
+export async function hasDocumentsProcessing(): Promise<boolean> {
+  try {
+    const { count, error } = await supabase
+      .from('documents')
+      .select('*', { count: 'exact', head: true })
+      .eq('status', 'processing');
+
+    if (error) {
+      console.error('Error checking processing documents:', error);
+      return false;
+    }
+
+    return (count || 0) > 0;
+  } catch (error) {
+    console.error('Error in hasDocumentsProcessing:', error);
+    return false;
   }
 }
 

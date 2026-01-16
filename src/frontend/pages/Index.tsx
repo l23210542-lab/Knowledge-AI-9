@@ -9,7 +9,7 @@ const Index = () => {
     <AppLayout>
       <div className="space-y-8 animate-fade-in">
         <SearchHero />
-        <StatsCards />
+        
         <div className="grid gap-6 lg:grid-cols-2">
         </div>
       </div>
