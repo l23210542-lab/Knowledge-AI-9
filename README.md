@@ -1,108 +1,108 @@
 # KnowledgeHub AI
 
-Una plataforma de conocimiento interno que centraliza documentación empresarial y permite su consulta mediante un asistente de IA basado en RAG (Retrieval-Augmented Generation).
+An internal knowledge platform that centralizes corporate documentation and enables querying through an AI assistant based on RAG (Retrieval-Augmented Generation).
 
-## 📋 Descripción
+## 📋 Description
 
-KnowledgeHub AI es una solución MVP diseñada para resolver el problema de documentación dispersa en las organizaciones. Permite a los usuarios subir documentos internos (PDF, TXT, Markdown) y consultarlos usando lenguaje natural, obteniendo respuestas precisas basadas exclusivamente en la documentación proporcionada.
+KnowledgeHub AI is an MVP solution designed to solve the problem of scattered documentation in organizations. It allows users to upload internal documents (PDF, TXT, Markdown) and query them using natural language, obtaining accurate answers based exclusively on the provided documentation.
 
-### Características Principales
+### Key Features
 
-- 📄 **Gestión de Documentos**: Subida y organización de documentos por departamentos
-- 🤖 **Chat con IA**: Consulta inteligente usando RAG (Retrieval-Augmented Generation)
-- 🔍 **Búsqueda Semántica**: Búsqueda de información relevante usando embeddings vectoriales
-- 📊 **Dashboard**: Visualización de estadísticas y documentos recientes
-- 💾 **Persistencia de Sesión**: Historial de conversación durante la sesión del navegador
-- 🔐 **Integración con Supabase**: Base de datos PostgreSQL con pgvector para búsqueda semántica
+- 📄 **Document Management**: Upload and organize documents by departments
+- 🤖 **AI Chat**: Intelligent querying using RAG (Retrieval-Augmented Generation)
+- 🔍 **Semantic Search**: Search for relevant information using vector embeddings
+- 📊 **Dashboard**: Visualization of statistics and recent documents
+- 💾 **Session Persistence**: Conversation history during browser session
+- 🔐 **Supabase Integration**: PostgreSQL database with pgvector for semantic search
 
-## 🛠️ Tecnologías Utilizadas
+## 🛠️ Technologies Used
 
 ### Frontend
-- **React 18** - Biblioteca de UI
-- **TypeScript** - Tipado estático
-- **Vite** - Build tool y dev server
-- **React Router** - Enrutamiento
-- **Tailwind CSS** - Framework de estilos
-- **shadcn/ui** - Componentes UI
-- **Radix UI** - Componentes primitivos accesibles
-- **Lucide React** - Iconos
+- **React 18** - UI Library
+- **TypeScript** - Static typing
+- **Vite** - Build tool and dev server
+- **React Router** - Routing
+- **Tailwind CSS** - Styling framework
+- **shadcn/ui** - UI Components
+- **Radix UI** - Accessible primitive components
+- **Lucide React** - Icons
 
-### Backend & Servicios
+### Backend & Services
 - **Supabase** - Backend as a Service
-  - PostgreSQL con extensión pgvector
-  - Supabase Storage para archivos
+  - PostgreSQL with pgvector extension
+  - Supabase Storage for files
   - Row Level Security (RLS)
-- **OpenAI API** - IA y embeddings
-  - `text-embedding-3-small` para embeddings
-  - `gpt-3.5-turbo` para generación de respuestas
-- **PDF.js** - Procesamiento de archivos PDF
+- **OpenAI API** - AI and embeddings
+  - `text-embedding-3-small` for embeddings
+  - `gpt-4o-mini` for response generation
+- **PDF.js** - PDF file processing
 
-### Herramientas de Desarrollo
+### Development Tools
 - **ESLint** - Linter
-- **TypeScript** - Compilador de tipos
-- **PostCSS** - Procesamiento de CSS
+- **TypeScript** - Type compiler
+- **PostCSS** - CSS processing
 
-## 📦 Requisitos Previos
+## 📦 Prerequisites
 
-Antes de comenzar, asegúrate de tener instalado:
+Before starting, make sure you have installed:
 
-- **Node.js** >= 18.x ([instalar con nvm](https://github.com/nvm-sh/nvm#installing-and-updating))
-- **npm** >= 9.x (incluido con Node.js)
-- **Cuenta de Supabase** ([crear cuenta](https://supabase.com))
-- **API Key de OpenAI** ([obtener aquí](https://platform.openai.com/api-keys))
+- **Node.js** >= 18.x ([install with nvm](https://github.com/nvm-sh/nvm#installing-and-updating))
+- **npm** >= 9.x (included with Node.js)
+- **Supabase Account** ([create account](https://supabase.com))
+- **OpenAI API Key** ([get it here](https://platform.openai.com/api-keys))
 
-## 🚀 Instalación
+## 🚀 Installation
 
-### 1. Clonar el repositorio
+### 1. Clone the repository
 
 ```bash
 git clone <YOUR_GIT_URL>
 cd blueprint-builder-main
 ```
 
-### 2. Instalar dependencias
+### 2. Install dependencies
 
 ```bash
 npm install
 ```
 
-### 3. Configurar variables de entorno
+### 3. Configure environment variables
 
-Crea un archivo `.env` en la raíz del proyecto:
+Create a `.env` file in the project root:
 
 ```env
 # Supabase Configuration
-VITE_SUPABASE_URL=tu_url_de_supabase
-VITE_SUPABASE_ANON_KEY=tu_anon_key
+VITE_SUPABASE_URL=your_supabase_url
+VITE_SUPABASE_ANON_KEY=your_anon_key
 
 # OpenAI Configuration
-VITE_OPENAI_API_KEY=sk-proj-tu_api_key_de_openai
+VITE_OPENAI_API_KEY=sk-proj-your_openai_api_key
 
-# API URL (opcional, para desarrollo)
+# API URL (optional, for development)
 VITE_API_URL=http://localhost:3000
 ```
 
-**Nota**: El archivo `.env` ya está incluido en `.gitignore` y no se subirá al repositorio.
+**Note**: The `.env` file is already included in `.gitignore` and will not be committed to the repository.
 
-### 4. Configurar Supabase
+### 4. Configure Supabase
 
-Sigue la guía completa en [`docs/SUPABASE_SETUP.md`](./docs/SUPABASE_SETUP.md) para:
+Follow the complete guide in [`docs/SUPABASE_SETUP.md`](./docs/SUPABASE_SETUP.md) to:
 
-1. Crear las tablas en Supabase
-2. Configurar Supabase Storage
-3. Configurar políticas RLS
-4. Habilitar la extensión pgvector
+1. Create tables in Supabase
+2. Configure Supabase Storage
+3. Configure RLS policies
+4. Enable pgvector extension
 
-**Resumen rápido**:
+**Quick summary**:
 
 ```sql
--- Ejecutar en SQL Editor de Supabase
--- Ver docs/SUPABASE_SETUP.md para el script completo
+-- Execute in Supabase SQL Editor
+-- See docs/SUPABASE_SETUP.md for the complete script
 ```
 
-### 5. Copiar el worker de PDF.js
+### 5. Copy PDF.js worker
 
-El worker de PDF.js debe estar en la carpeta `public/`:
+The PDF.js worker must be in the `public/` folder:
 
 ```bash
 # Windows (PowerShell)
@@ -112,25 +112,25 @@ Copy-Item "node_modules\pdfjs-dist\build\pdf.worker.min.mjs" -Destination "publi
 cp node_modules/pdfjs-dist/build/pdf.worker.min.mjs public/pdf.worker.min.mjs
 ```
 
-## ▶️ Ejecución
+## ▶️ Running
 
-### Modo Desarrollo
+### Development Mode
 
 ```bash
 npm run dev
 ```
 
-La aplicación estará disponible en `http://localhost:8080`
+The application will be available at `http://localhost:8080`
 
-### Build de Producción
+### Production Build
 
 ```bash
 npm run build
 ```
 
-Los archivos compilados se generarán en la carpeta `dist/`
+Compiled files will be generated in the `dist/` folder
 
-### Preview del Build
+### Build Preview
 
 ```bash
 npm run preview
@@ -142,205 +142,205 @@ npm run preview
 npm run lint
 ```
 
-## 📁 Estructura del Proyecto
+## 📁 Project Structure
 
 ```
 blueprint-builder-main/
-├── public/                 # Archivos estáticos
-│   ├── pdf.worker.min.mjs # Worker de PDF.js
+├── public/                 # Static files
+│   ├── pdf.worker.min.mjs # PDF.js worker
 │   └── ...
 ├── src/
-│   ├── frontend/          # Código del frontend
-│   │   ├── components/    # Componentes React
-│   │   │   ├── dashboard/ # Componentes del dashboard
-│   │   │   ├── layout/    # Layout y navegación
-│   │   │   └── ui/        # Componentes UI (shadcn/ui)
-│   │   ├── pages/         # Páginas de la aplicación
-│   │   │   ├── Chat.tsx   # Página de chat con IA
-│   │   │   ├── Documents.tsx # Listado de documentos
-│   │   │   ├── Upload.tsx # Subida de documentos
+│   ├── frontend/          # Frontend code
+│   │   ├── components/    # React components
+│   │   │   ├── dashboard/ # Dashboard components
+│   │   │   ├── layout/    # Layout and navigation
+│   │   │   └── ui/        # UI components (shadcn/ui)
+│   │   ├── pages/         # Application pages
+│   │   │   ├── Chat.tsx   # AI chat page
+│   │   │   ├── Documents.tsx # Document listing
+│   │   │   ├── Upload.tsx # Document upload
 │   │   │   └── ...
 │   │   ├── hooks/         # Custom hooks
-│   │   ├── lib/           # Utilidades del frontend
-│   │   ├── App.tsx        # Componente principal
-│   │   └── main.tsx       # Punto de entrada
+│   │   ├── lib/           # Frontend utilities
+│   │   ├── App.tsx        # Main component
+│   │   └── main.tsx       # Entry point
 │   │
-│   └── backend/           # Código del backend
+│   └── backend/           # Backend code
 │       ├── lib/
-│       │   ├── api/       # Servicios API
-│       │   │   ├── chat.ts              # Lógica de RAG y chat
-│       │   │   ├── documents.ts         # Gestión de documentos
-│       │   │   ├── documentProcessing.ts # Procesamiento de PDF/TXT/MD
-│       │   │   ├── departments.ts       # Gestión de departamentos
-│       │   │   └── users.ts             # Gestión de usuarios
-│       │   ├── supabase.ts              # Cliente de Supabase
-│       │   └── checkSupabaseConfig.ts   # Verificación de config
-│       └── database.sql   # Esquema de base de datos
+│       │   ├── api/       # API services
+│       │   │   ├── chat.ts              # RAG and chat logic
+│       │   │   ├── documents.ts         # Document management
+│       │   │   ├── documentProcessing.ts # PDF/TXT/MD processing
+│       │   │   ├── departments.ts       # Department management
+│       │   │   └── users.ts             # User management
+│       │   ├── supabase.ts              # Supabase client
+│       │   └── checkSupabaseConfig.ts   # Config verification
+│       └── database.sql   # Database schema
 │
-├── docs/                  # Documentación
+├── docs/                  # Documentation
 │   ├── prd.md            # Product Requirement Document
-│   ├── SUPABASE_SETUP.md # Guía de configuración de Supabase
-│   ├── ENV_SETUP.md      # Configuración de variables de entorno
-│   ├── OPENAI_SETUP.md   # Configuración de OpenAI
-│   ├── STRUCTURE.md      # Estructura del proyecto
+│   ├── SUPABASE_SETUP.md # Supabase setup guide
+│   ├── ENV_SETUP.md      # Environment variables setup
+│   ├── OPENAI_SETUP.md   # OpenAI setup
+│   ├── STRUCTURE.md      # Project structure
 │   └── ...
 │
-├── .env                   # Variables de entorno (no versionado)
-├── package.json          # Dependencias y scripts
-├── tsconfig.json         # Configuración de TypeScript
-├── vite.config.ts        # Configuración de Vite
-└── tailwind.config.ts    # Configuración de Tailwind
+├── .env                   # Environment variables (not versioned)
+├── package.json          # Dependencies and scripts
+├── tsconfig.json         # TypeScript configuration
+├── vite.config.ts        # Vite configuration
+└── tailwind.config.ts    # Tailwind configuration
 ```
 
-## 🎯 Uso
+## 🎯 Usage
 
-### Subir Documentos
+### Upload Documents
 
-1. Navega a la página **"Subir"**
-2. Selecciona uno o más archivos (PDF, TXT, MD)
-3. Asigna un departamento a cada documento
-4. Haz clic en **"Subir"**
+1. Navigate to the **"Upload"** page
+2. Select one or more files (PDF, TXT, MD)
+3. Assign a department to each document
+4. Click **"Process"** to upload and process
 
-**Formatos soportados**:
+**Supported formats**:
 - PDF (`.pdf`)
-- Texto plano (`.txt`)
+- Plain text (`.txt`)
 - Markdown (`.md`)
 
-**Límites**:
-- Tamaño máximo: 10MB por archivo
-- Los documentos se procesan automáticamente al hacer la primera consulta
+**Limits**:
+- Maximum size: 10MB per file
+- Documents are automatically processed during upload
 
-### Consultar con IA
+### Query with AI
 
-1. Navega a la página **"Chat"**
-2. Escribe tu pregunta en lenguaje natural
-3. El sistema buscará información relevante en los documentos subidos
-4. Recibirás una respuesta basada en el contenido de los documentos
+1. Navigate to the **"Chat"** page
+2. Type your question in natural language
+3. The system will search for relevant information in uploaded documents
+4. You will receive an answer based on the document content
 
-**Características del chat**:
-- Historial de conversación durante la sesión
-- Fuentes de información citadas
-- Respuestas basadas exclusivamente en documentos subidos
+**Chat features**:
+- Conversation history during the session
+- Cited information sources
+- Answers based exclusively on uploaded documents
 
-### Ver Documentos
+### View Documents
 
-1. Navega a la página **"Documentos"**
-2. Visualiza todos los documentos subidos
-3. Filtra por departamento
-4. Ver el estado de procesamiento de cada documento
+1. Navigate to the **"Documents"** page
+2. View all uploaded documents
+3. Filter by department
+4. See the processing status of each document
 
-## 🔧 Configuración Avanzada
+## 🔧 Advanced Configuration
 
-### Variables de Entorno
+### Environment Variables
 
-Consulta [`docs/ENV_SETUP.md`](./docs/ENV_SETUP.md) para detalles sobre:
-- Configuración de variables de entorno
-- Troubleshooting de problemas comunes
-- Validación de credenciales
+See [`docs/ENV_SETUP.md`](./docs/ENV_SETUP.md) for details on:
+- Environment variable configuration
+- Troubleshooting common issues
+- Credential validation
 
 ### Supabase
 
-Consulta [`docs/SUPABASE_SETUP.md`](./docs/SUPABASE_SETUP.md) para:
-- Configuración completa de Supabase
-- Creación de tablas y políticas RLS
-- Configuración de Storage
-- Solución de problemas de RLS
+See [`docs/SUPABASE_SETUP.md`](./docs/SUPABASE_SETUP.md) for:
+- Complete Supabase setup
+- Table and RLS policy creation
+- Storage configuration
+- RLS troubleshooting
 
 ### OpenAI
 
-Consulta [`docs/OPENAI_SETUP.md`](./docs/OPENAI_SETUP.md) para:
-- Obtención de API key
-- Configuración en el proyecto
+See [`docs/OPENAI_SETUP.md`](./docs/OPENAI_SETUP.md) for:
+- API key acquisition
+- Project configuration
 - Troubleshooting
 
-## 📚 Documentación Adicional
+## 📚 Additional Documentation
 
-- [`docs/prd.md`](./docs/prd.md) - Product Requirement Document completo
-- [`docs/STRUCTURE.md`](./docs/STRUCTURE.md) - Estructura detallada del proyecto
-- [`docs/SUPABASE_SETUP.md`](./docs/SUPABASE_SETUP.md) - Guía de configuración de Supabase
-- [`docs/ENV_SETUP.md`](./docs/ENV_SETUP.md) - Configuración de variables de entorno
-- [`docs/OPENAI_SETUP.md`](./docs/OPENAI_SETUP.md) - Configuración de OpenAI
-- [`docs/STORAGE_RLS_FIX.md`](./docs/STORAGE_RLS_FIX.md) - Solución de problemas de RLS en Storage
+- [`docs/prd.md`](./docs/prd.md) - Complete Product Requirement Document
+- [`docs/STRUCTURE.md`](./docs/STRUCTURE.md) - Detailed project structure
+- [`docs/SUPABASE_SETUP.md`](./docs/SUPABASE_SETUP.md) - Supabase setup guide
+- [`docs/ENV_SETUP.md`](./docs/ENV_SETUP.md) - Environment variables setup
+- [`docs/OPENAI_SETUP.md`](./docs/OPENAI_SETUP.md) - OpenAI setup
+- [`docs/STORAGE_RLS_FIX.md`](./docs/STORAGE_RLS_FIX.md) - Storage RLS troubleshooting
 
-## 🐛 Solución de Problemas
+## 🐛 Troubleshooting
 
 ### Error: "Supabase credentials not found"
 
-- Verifica que el archivo `.env` existe en la raíz del proyecto
-- Asegúrate de que las variables comienzan con `VITE_`
-- Reinicia el servidor de desarrollo después de modificar `.env`
+- Verify that the `.env` file exists in the project root
+- Make sure variables start with `VITE_`
+- Restart the development server after modifying `.env`
 
 ### Error: "StorageApiError: new row violates row-level security policy"
 
-- Consulta [`docs/STORAGE_RLS_FIX.md`](./docs/STORAGE_RLS_FIX.md)
-- Configura las políticas RLS para el bucket `documents` en Supabase
+- See [`docs/STORAGE_RLS_FIX.md`](./docs/STORAGE_RLS_FIX.md)
+- Configure RLS policies for the `documents` bucket in Supabase
 
-### Error: "OpenAI no está configurado"
+### Error: "OpenAI is not configured"
 
-- Verifica que `VITE_OPENAI_API_KEY` está en tu archivo `.env`
-- Asegúrate de que la API key es válida y tiene créditos disponibles
+- Verify that `VITE_OPENAI_API_KEY` is in your `.env` file
+- Make sure the API key is valid and has available credits
 
-### Los PDFs no se procesan
+### PDFs are not processed
 
-- Verifica que `public/pdf.worker.min.mjs` existe
-- Revisa la consola del navegador para errores específicos
-- Asegúrate de tener conexión a internet (el worker puede requerir recursos externos)
+- Verify that `public/pdf.worker.min.mjs` exists
+- Check the browser console for specific errors
+- Make sure you have an internet connection (the worker may require external resources)
 
-### La conversación se borra al cambiar de página
+### Conversation is cleared when changing pages
 
-- Esto es normal: la conversación persiste durante la sesión pero se borra al recargar
-- El historial se guarda en `sessionStorage` del navegador
+- This is normal: the conversation persists during the session but is cleared on reload
+- History is saved in browser `sessionStorage`
 
-## 🚢 Despliegue
+## 🚢 Deployment
 
-### Build para Producción
+### Production Build
 
 ```bash
 npm run build
 ```
 
-### Variables de Entorno en Producción
+### Environment Variables in Production
 
-Asegúrate de configurar las mismas variables de entorno en tu plataforma de despliegue:
+Make sure to configure the same environment variables on your deployment platform:
 
 - `VITE_SUPABASE_URL`
 - `VITE_SUPABASE_ANON_KEY`
 - `VITE_OPENAI_API_KEY`
 
-### Plataformas Recomendadas
+### Recommended Platforms
 
-- **Vercel** - Despliegue automático desde Git
-- **Netlify** - Similar a Vercel
-- **Supabase Hosting** - Integración nativa con Supabase
+- **Vercel** - Automatic deployment from Git
+- **Netlify** - Similar to Vercel
+- **Supabase Hosting** - Native Supabase integration
 
-## 📝 Scripts Disponibles
+## 📝 Available Scripts
 
-| Script | Descripción |
+| Script | Description |
 |--------|-------------|
-| `npm run dev` | Inicia el servidor de desarrollo |
-| `npm run build` | Crea un build de producción |
-| `npm run build:dev` | Crea un build en modo desarrollo |
-| `npm run preview` | Preview del build de producción |
-| `npm run lint` | Ejecuta el linter |
+| `npm run dev` | Starts the development server |
+| `npm run build` | Creates a production build |
+| `npm run build:dev` | Creates a development build |
+| `npm run preview` | Preview of the production build |
+| `npm run lint` | Runs the linter |
 
-## 🤝 Contribuir
+## 🤝 Contributing
 
-Este es un proyecto MVP. Para contribuir:
+This is an MVP project. To contribute:
 
-1. Fork el repositorio
-2. Crea una rama para tu feature (`git checkout -b feature/AmazingFeature`)
-3. Commit tus cambios (`git commit -m 'Add some AmazingFeature'`)
-4. Push a la rama (`git push origin feature/AmazingFeature`)
-5. Abre un Pull Request
+1. Fork the repository
+2. Create a branch for your feature (`git checkout -b feature/AmazingFeature`)
+3. Commit your changes (`git commit -m 'Add some AmazingFeature'`)
+4. Push to the branch (`git push origin feature/AmazingFeature`)
+5. Open a Pull Request
 
-## 📄 Licencia
+## 📄 License
 
-Este proyecto es privado y está bajo desarrollo.
+This project is private and under active development.
 
-## 👥 Autor
+## 👥 Author
 
-Desarrollado como parte de un proyecto de plataforma de conocimiento interno.
+Developed as part of an internal knowledge platform project.
 
 ---
 
-**Nota**: Este es un proyecto MVP. Algunas funcionalidades pueden estar en desarrollo activo.
+**Note**: This is an MVP project. Some features may be under active development.
