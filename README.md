@@ -11,7 +11,6 @@ KnowledgeHub AI is an MVP solution designed to solve the problem of scattered do
 - 📄 **Document Management**: Upload and organize documents by departments
 - 🤖 **AI Chat**: Intelligent querying using RAG (Retrieval-Augmented Generation)
 - 🔍 **Semantic Search**: Search for relevant information using vector embeddings
-- 📊 **Dashboard**: Visualization of statistics and recent documents
 - 💾 **Session Persistence**: Conversation history during browser session
 - 🔐 **Supabase Integration**: PostgreSQL database with pgvector for semantic search
 
