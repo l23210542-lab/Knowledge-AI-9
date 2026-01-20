@@ -36,6 +36,7 @@ interface DocumentChunk {
   chunk_index: number;
   content: string;
   embedding?: number[];
+  similarity?: number; // Similitud calculada para el chunk
 }
 
 /**
@@ -60,14 +61,34 @@ async function generateEmbedding(text: string): Promise<number[]> {
 }
 
 /**
- * Busca chunks similares usando pgvector en Supabase
+ * Calcula la similitud coseno entre dos vectores
  */
-async function searchSimilarChunks(embedding: number[], limit: number = 3): Promise<DocumentChunk[]> {
+function cosineSimilarity(a: number[], b: number[]): number {
+  if (a.length !== b.length) {
+    return 0;
+  }
+  
+  const dotProduct = a.reduce((sum, val, i) => sum + val * (b[i] || 0), 0);
+  const magnitudeA = Math.sqrt(a.reduce((sum, val) => sum + val * val, 0));
+  const magnitudeB = Math.sqrt(b.reduce((sum, val) => sum + val * val, 0));
+  
+  if (magnitudeA === 0 || magnitudeB === 0) {
+    return 0;
+  }
+  
+  return dotProduct / (magnitudeA * magnitudeB);
+}
+
+/**
+ * Busca chunks similares usando pgvector en Supabase
+ * Retorna chunks con su similitud calculada
+ */
+async function searchSimilarChunks(embedding: number[], limit: number = 5): Promise<DocumentChunk[]> {
   try {
     // Usar la función de búsqueda por similitud de pgvector
     const { data, error } = await supabase.rpc('match_document_chunks', {
       query_embedding: embedding,
-      match_threshold: 0.7,
+      match_threshold: 0.5, // Threshold más estricto
       match_count: limit,
     });
 
@@ -81,7 +102,7 @@ async function searchSimilarChunks(embedding: number[], limit: number = 3): Prom
         .from('document_chunks')
         .select('id, document_id, chunk_index, content, embedding')
         .not('embedding', 'is', null)
-        .limit(100); // Limitar para MVP
+        .limit(200); // Aumentar límite para tener más opciones
 
       if (fetchError) {
         throw fetchError;
@@ -95,7 +116,7 @@ async function searchSimilarChunks(embedding: number[], limit: number = 3): Prom
 
       console.log(`Encontrados ${allChunks.length} chunks con embeddings. Calculando similitud...`);
 
-      // Calcular similitud coseno (simplificado para MVP)
+      // Calcular similitud coseno para todos los chunks
       const chunksWithSimilarity = allChunks
         .map((chunk: any) => {
           // Los embeddings pueden venir como array o como string JSON desde Supabase
@@ -126,10 +147,7 @@ async function searchSimilarChunks(embedding: number[], limit: number = 3): Prom
           }
           
           // Calcular similitud coseno
-          const dotProduct = embedding.reduce((sum, val, i) => sum + val * (chunkEmbedding[i] || 0), 0);
-          const magnitudeA = Math.sqrt(embedding.reduce((sum, val) => sum + val * val, 0));
-          const magnitudeB = Math.sqrt(chunkEmbedding.reduce((sum: number, val: number) => sum + val * val, 0));
-          const similarity = magnitudeB > 0 && magnitudeA > 0 ? dotProduct / (magnitudeA * magnitudeB) : 0;
+          const similarity = cosineSimilarity(embedding, chunkEmbedding);
 
           return { ...chunk, similarity };
         })
@@ -137,20 +155,30 @@ async function searchSimilarChunks(embedding: number[], limit: number = 3): Prom
         .sort((a: any, b: any) => b.similarity - a.similarity);
 
       console.log(`Chunks con similitud calculada: ${chunksWithSimilarity.length}`);
-      console.log(`Similitudes:`, chunksWithSimilarity.map((c: any) => c.similarity.toFixed(3)).slice(0, 5));
+      console.log(`Top similitudes:`, chunksWithSimilarity.map((c: any) => c.similarity.toFixed(3)).slice(0, 10));
 
-      // Filtrar por threshold y limitar resultados
-      const filteredChunks = chunksWithSimilarity
-        .filter((chunk: any) => chunk.similarity >= 0.3) // Threshold más bajo para MVP (0.3)
-        .slice(0, limit)
-        .map(({ similarity, ...chunk }: any) => chunk);
-
-      console.log(`Chunks después de filtrar (threshold 0.3): ${filteredChunks.length}`);
-
-      return filteredChunks;
+      // Retornar chunks con similitud (sin filtrar aquí, se filtrará después por documento)
+      return chunksWithSimilarity.slice(0, limit * 2) as DocumentChunk[]; // Obtener más para tener opciones
     }
 
-    return data || [];
+    // Si la función RPC funciona, calcular similitud para los resultados
+    if (data && data.length > 0) {
+      // Si la función RPC ya devuelve similitud, usarla
+      // Si no, calcularla
+      return data.map((chunk: any) => {
+        if (chunk.similarity !== undefined) {
+          return chunk as DocumentChunk;
+        }
+        // Calcular similitud si no viene en la respuesta
+        if (chunk.embedding && Array.isArray(chunk.embedding)) {
+          const similarity = cosineSimilarity(embedding, chunk.embedding);
+          return { ...chunk, similarity } as DocumentChunk;
+        }
+        return chunk as DocumentChunk;
+      });
+    }
+
+    return [];
   } catch (error) {
     console.error('Error searching similar chunks:', error);
     return [];
@@ -227,8 +255,15 @@ function isGreeting(message: string): boolean {
  * Responde a saludos sin usar RAG
  */
 function answerGreeting(): ChatQueryResponse {
+  const greetings = [
+    '¡Hola! 👋 Me da mucho gusto ayudarte. ¿En qué puedo asistirte hoy?',
+    '¡Hola! 😊 Estoy aquí para ayudarte a encontrar información en tus documentos. ¿Qué te gustaría saber?',
+    '¡Hola! Bienvenido. Cuéntame, ¿qué información necesitas buscar hoy?',
+  ];
+  const randomGreeting = greetings[Math.floor(Math.random() * greetings.length)];
+  
   return {
-    answer: '¡Hola! Bienvenido. Estoy aquí para ayudarte. ¿Tienes alguna pregunta específica en la que pueda asistirte?',
+    answer: randomGreeting,
     sources: [],
   };
 }
@@ -279,8 +314,18 @@ async function answerSystemQuestion(question: string): Promise<ChatQueryResponse
       .select('*', { count: 'exact', head: true })
       .not('embedding', 'is', null);
     
+    const docCount = documentsCount || 0;
+    const chunkCount = chunksCount || 0;
+    
+    if (docCount === 0) {
+      return {
+        answer: 'Por ahora no hay documentos procesados en el sistema. ¿Te gustaría subir algunos documentos para empezar?',
+        sources: [],
+      };
+    }
+    
     return {
-      answer: `Actualmente hay ${documentsCount || 0} documento(s) procesado(s) en el sistema, con un total de ${chunksCount || 0} fragmento(s) de información indexados para búsqueda.`,
+      answer: `Actualmente tengo ${docCount} documento${docCount > 1 ? 's' : ''} procesado${docCount > 1 ? 's' : ''} en el sistema, con un total de ${chunkCount} fragmento${chunkCount > 1 ? 's' : ''} de información indexados. ¡Estoy listo para ayudarte a encontrar lo que necesitas! 😊`,
       sources: [],
     };
   }
@@ -295,14 +340,14 @@ async function answerSystemQuestion(question: string): Promise<ChatQueryResponse
     
     if (!documents || documents.length === 0) {
       return {
-        answer: 'Actualmente no hay documentos en el sistema. Puedes subir documentos para que el sistema pueda responder preguntas sobre su contenido.',
+        answer: 'Por ahora no tengo documentos disponibles. ¿Te gustaría subir algunos? Una vez que los subas, podré ayudarte a encontrar cualquier información que necesites en ellos.',
         sources: [],
       };
     }
     
     const docList = documents.map(doc => `• ${doc.file_name}`).join('\n');
     return {
-      answer: `Puedes consultar información sobre los siguientes documentos:\n\n${docList}\n\nPuedes hacer preguntas específicas sobre el contenido de cualquiera de estos documentos y el sistema buscará la información relevante para responderte.`,
+      answer: `¡Claro! Puedo ayudarte a consultar información sobre estos documentos:\n\n${docList}\n\nSolo hazme una pregunta específica sobre el contenido de cualquiera de estos documentos y buscaré la información relevante para responderte. ¿Qué te gustaría saber? 😊`,
       sources: [],
     };
   }
@@ -310,7 +355,7 @@ async function answerSystemQuestion(question: string): Promise<ChatQueryResponse
   // Cómo funciona el sistema
   if (lowerQuestion.includes('cómo funciona') || lowerQuestion.includes('como funciona')) {
     return {
-      answer: 'El sistema de búsqueda utiliza inteligencia artificial para buscar información relevante en los documentos subidos. Cuando haces una pregunta, el sistema:\n\n1. Analiza tu pregunta usando embeddings\n2. Busca los fragmentos más relevantes en los documentos\n3. Genera una respuesta basada en la información encontrada\n4. Te muestra las fuentes de donde obtuvo la información',
+      answer: '¡Te explico cómo trabajo! 😊\n\nCuando me haces una pregunta:\n\n1. Analizo tu pregunta usando inteligencia artificial para entender qué buscas\n2. Busco en todos los documentos los fragmentos más relevantes a tu pregunta\n3. Genero una respuesta clara basada en la información que encontré\n4. Te muestro las fuentes de donde obtuve la información para que puedas verificarla\n\nBásicamente, soy como un asistente que lee todos tus documentos y te ayuda a encontrar la información que necesitas de forma rápida y precisa. ¿Hay algo específico que te gustaría buscar?',
       sources: [],
     };
   }
@@ -318,14 +363,14 @@ async function answerSystemQuestion(question: string): Promise<ChatQueryResponse
   // Tipos de documentos
   if (lowerQuestion.includes('qué tipos de documentos') || lowerQuestion.includes('que tipos de documentos')) {
     return {
-      answer: 'El sistema acepta los siguientes tipos de documentos:\n\n• Archivos PDF (.pdf)\n• Archivos de texto (.txt)\n• Archivos Markdown (.md)\n\nUna vez subidos, estos documentos son procesados automáticamente para extraer su contenido y hacerlo buscable.',
+      answer: 'Acepto los siguientes tipos de documentos:\n\n• Archivos PDF (.pdf)\n• Archivos de texto (.txt)\n• Archivos Markdown (.md)\n\nUna vez que los subas, los proceso automáticamente para extraer su contenido y hacerlo buscable. ¡Es muy fácil! Solo súbelos y podrás hacer preguntas sobre ellos de inmediato.',
       sources: [],
     };
   }
   
   // Respuesta genérica para preguntas del sistema
   return {
-    answer: 'Esta es una pregunta sobre el sistema. Puedes consultar información sobre los documentos subidos haciendo preguntas específicas sobre su contenido.',
+    answer: '¡Claro! Estoy aquí para ayudarte. Puedes hacerme preguntas sobre los documentos que tengas subidos, o si necesitas ayuda con algo más específico del sistema, con gusto te ayudo. ¿Qué te gustaría saber?',
     sources: [],
   };
 }
@@ -384,7 +429,7 @@ export async function queryChat(
 
     if (!documentsCount || documentsCount === 0) {
       return {
-        answer: 'No hay documentos en el sistema. Por favor, sube algunos documentos primero antes de hacer preguntas.',
+        answer: 'Por ahora no tengo documentos disponibles para consultar. ¿Te gustaría subir algunos documentos primero? Una vez que los subas, podré ayudarte a encontrar la información que necesitas.',
         sources: [],
       };
     }
@@ -397,7 +442,7 @@ export async function queryChat(
 
     if (!chunksCount || chunksCount === 0) {
       return {
-        answer: `Hay ${documentsCount} documento(s) en el sistema, pero aún no están procesados para búsqueda.\n\nLos documentos se procesan automáticamente cuando los subes. Si acabas de subir documentos, espera a que terminen de procesarse antes de hacer preguntas.\n\n**Solución:**\n1. Verifica en la página de "Subir Documentos" que los documentos hayan terminado de procesarse\n2. Asegúrate de que los documentos sean archivos TXT, PDF o MD\n3. Verifica que la API key de OpenAI esté configurada correctamente`,
+        answer: `Veo que hay ${documentsCount} documento${documentsCount > 1 ? 's' : ''} en el sistema, pero aún se están procesando. 😊\n\nLos documentos se procesan automáticamente cuando los subes. Si acabas de subirlos, dale unos momentos para que terminen de procesarse. Una vez que estén listos, podré ayudarte a encontrar cualquier información que necesites.\n\n**Para verificar:**\n• Revisa en la página de "Subir Documentos" que los documentos hayan terminado de procesarse\n• Asegúrate de que sean archivos TXT, PDF o MD\n• Si pasan varios minutos y aún no se procesan, verifica que la configuración esté correcta\n\n¡Vuelve en un momento y estaré listo para ayudarte!`,
         sources: [],
       };
     }
@@ -405,48 +450,132 @@ export async function queryChat(
     // 2. Generar embedding de la pregunta
     const questionEmbedding = await generateEmbedding(question);
 
-    // 3. Buscar chunks similares
-    const similarChunks = await searchSimilarChunks(questionEmbedding, 3);
+    // 3. Buscar chunks similares (obtener más para tener opciones)
+    const similarChunks = await searchSimilarChunks(questionEmbedding, 10);
 
     if (similarChunks.length === 0) {
       return {
-        answer: 'No encontré información relevante en los documentos subidos para responder tu pregunta. Intenta reformularla o verifica que hay documentos procesados en el sistema.',
+        answer: 'Hmm, no encontré información específica sobre eso en los documentos que tengo disponibles. ¿Podrías reformular tu pregunta o darme más detalles sobre lo que buscas? Estoy aquí para ayudarte a encontrar lo que necesitas.',
         sources: [],
       };
     }
 
-    // 5. Construir el contexto con los chunks encontrados
-    const context = similarChunks
+    // 4. Filtrar y agrupar chunks por documento según similitud
+    // Umbral de similitud mínimo para considerar un chunk relevante
+    const MIN_SIMILARITY_THRESHOLD = 0.5;
+    
+    // Agrupar chunks por documento y encontrar la similitud máxima por documento
+    const chunksByDocument = new Map<string, { chunks: DocumentChunk[], maxSimilarity: number }>();
+    
+    for (const chunk of similarChunks) {
+      const similarity = chunk.similarity || 0;
+      
+      // Solo considerar chunks con similitud suficiente
+      if (similarity < MIN_SIMILARITY_THRESHOLD) {
+        continue;
+      }
+      
+      const docId = chunk.document_id;
+      const existing = chunksByDocument.get(docId);
+      
+      if (!existing) {
+        chunksByDocument.set(docId, { chunks: [chunk], maxSimilarity: similarity });
+      } else {
+        existing.chunks.push(chunk);
+        if (similarity > existing.maxSimilarity) {
+          existing.maxSimilarity = similarity;
+        }
+      }
+    }
+
+    // Ordenar documentos por similitud máxima (de mayor a menor)
+    const sortedDocuments = Array.from(chunksByDocument.entries())
+      .sort((a, b) => b[1].maxSimilarity - a[1].maxSimilarity);
+
+    if (sortedDocuments.length === 0) {
+      return {
+        answer: 'No encontré información que coincida directamente con tu pregunta en los documentos disponibles. ¿Podrías ser un poco más específico sobre lo que necesitas? Por ejemplo, puedes mencionar el tema o el área de interés, y con gusto te ayudo a buscar la información relevante.',
+        sources: [],
+      };
+    }
+
+    // 5. Seleccionar documentos para incluir en la respuesta
+    // Si hay múltiples documentos con alta similitud (>= 0.6), incluir hasta 2
+    // Si solo hay un documento con alta similitud, solo incluir ese
+    // Si hay documentos con similitud media (0.5-0.6), incluir solo el mejor
+    const HIGH_SIMILARITY_THRESHOLD = 0.6;
+    
+    const highSimilarityDocs = sortedDocuments.filter(([_, data]) => data.maxSimilarity >= HIGH_SIMILARITY_THRESHOLD);
+    const selectedDocuments = highSimilarityDocs.length > 1 
+      ? highSimilarityDocs.slice(0, 2) // Si hay múltiples con alta similitud, incluir hasta 2
+      : sortedDocuments.slice(0, 1); // Si solo hay uno o todos tienen similitud media, solo el mejor
+
+    // 6. Construir el contexto con los chunks de los documentos seleccionados
+    const contextChunks: DocumentChunk[] = [];
+    for (const [docId, data] of selectedDocuments) {
+      // Tomar el chunk con mayor similitud de cada documento seleccionado
+      const bestChunk = data.chunks.sort((a, b) => (b.similarity || 0) - (a.similarity || 0))[0];
+      if (bestChunk) {
+        contextChunks.push(bestChunk);
+      }
+    }
+
+    const context = contextChunks
       .map((chunk, index) => `[Documento ${index + 1}]\n${chunk.content}`)
       .join('\n\n---\n\n');
 
-    // 6. Obtener información de los documentos fuente
-    const documentIds = [...new Set(similarChunks.map(chunk => chunk.document_id))];
+    // 7. Obtener información de los documentos fuente seleccionados
+    const selectedDocumentIds = selectedDocuments.map(([docId]) => docId);
     const documentInfos = await Promise.all(
-      documentIds.map(id => getDocumentInfo(id))
+      selectedDocumentIds.map(id => getDocumentInfo(id))
     );
 
     const sources = documentInfos
       .filter((info): info is NonNullable<typeof info> => info !== null)
-      .map((info, index) => ({
-        title: info.file_name,
-        excerpt: similarChunks.find(chunk => chunk.document_id === documentIds[index])?.content.substring(0, 150) || '',
-      }));
+      .map((info, index) => {
+        const docId = selectedDocumentIds[index];
+        const docData = chunksByDocument.get(docId);
+        const bestChunk = docData?.chunks.sort((a, b) => (b.similarity || 0) - (a.similarity || 0))[0];
+        return {
+          title: info.file_name,
+          excerpt: bestChunk?.content.substring(0, 150) || '',
+        };
+      });
 
     // 7. Construir el prompt con el contexto
-    const systemPrompt = `Eres un asistente de IA especializado en responder preguntas basándote exclusivamente en la documentación proporcionada. 
+    const systemPrompt = `Eres un asistente de IA amigable y conversacional que ayuda a los usuarios a encontrar información en sus documentos. Tu personalidad es cálida, empática y natural, como si fueras un compañero de trabajo que está ahí para ayudar.
+
+ESTILO DE COMUNICACIÓN:
+- Sé natural y conversacional, como si estuvieras hablando con un amigo o colega
+- Usa un tono amigable y accesible, evitando lenguaje robótico o demasiado formal
+- Muestra entusiasmo genuino por ayudar
+- Sé empático cuando no encuentres información específica
+- Usa variación en tus respuestas para evitar sonar repetitivo
+- Puedes usar emojis ocasionalmente para hacer la conversación más amena (pero con moderación)
 
 INSTRUCCIONES:
-- Si el usuario inicia la conversacion con un saludo, responde con un saludo de bienvenida y ofrece ayuda para comenzar a hacer preguntas.
-- Si la pregunta es sobre el sistema mismo, responde usando la información proporcionada en el contexto.
-- Si la pregunta no especifica un tema en especifico, responde con un mensaje sugiriendo que el usuario especifique el tema de la pregunta.
-- Si el usuario pregunta sobre un tema que no está en el contexto, responde con un mensaje sugiriendo que el usuario especifique el tema de la pregunta.
-- Responde SOLO usando la información proporcionada en el contexto
-- Si la información no está en el contexto, di que no tienes esa información, pero que puedes consultar la documentación para obtener más información e inclusive proporciona una sugerencia de como buscar la información en la documentación.
-- Sé preciso y conciso
-- Si el usuario pregunta mas detalle sobre un tema, responde ampliando la informacion de la respuesta anterior con informacion nueva o adicional a la pregunta actual.
-- Cita los documentos fuente cuando sea relevante
+- Si el usuario pregunta sobre algo que NO está en el contexto proporcionado:
+  * NO digas "no tengo información" o "no encontré información" de forma directa y fría
+  * En su lugar, sé empático y ofrece ayuda: "No encontré información específica sobre eso en los documentos que tengo, pero puedo ayudarte. ¿Podrías darme más detalles sobre lo que buscas? Por ejemplo, ¿es sobre [tema relacionado] o algo diferente?"
+  * Sugiere formas alternativas de buscar o reformular la pregunta de manera amigable
+  * Mantén un tono positivo y útil, como si realmente quisieras ayudar
+
+- Si la información SÍ está en el contexto:
+  * Responde de forma clara y completa usando la información proporcionada
+  * Sé natural en tu explicación, como si estuvieras explicándoselo a un compañero
+  * Si es apropiado, puedes hacer conexiones o dar contexto adicional de forma conversacional
+  * Cita los documentos fuente cuando sea relevante, pero hazlo de forma natural
+
+- Si el usuario pregunta más detalles sobre un tema:
+  * Amplía la información de forma natural, conectando con lo que ya se ha discutido
+  * Mantén el contexto de la conversación
+
+- Si la pregunta es vaga o no específica:
+  * Responde de forma amigable pidiendo aclaración: "Me gustaría ayudarte mejor. ¿Podrías contarme un poco más sobre [tema]? Por ejemplo, ¿qué aspecto específico te interesa?"
+
+- Responde SOLO usando la información proporcionada en el contexto cuando sea relevante
 - Responde en el mismo idioma que la pregunta del usuario
+- Sé preciso pero también conversacional - no necesitas ser extremadamente conciso si puedes hacer la respuesta más natural
 
 CONTEXTO DE DOCUMENTOS:
 ${context}`;
@@ -472,8 +601,8 @@ ${context}`;
         ...userMessages,
         { role: 'user', content: question },
       ],
-      temperature: 0.7,
-      max_tokens: 500,
+      temperature: 0.8, // Aumentado para respuestas más naturales y variadas
+      max_tokens: 600, // Aumentado para respuestas más completas y naturales
     });
 
     const answer = completion.choices[0]?.message?.content || 'No pude generar una respuesta.';
