@@ -2,9 +2,10 @@ import { supabase } from '../supabase';
 import OpenAI from 'openai';
 import * as pdfjsLib from 'pdfjs-dist';
 
-// Configurar el worker de PDF.js una sola vez al cargar el módulo
-// Usar worker local desde la carpeta public (más confiable que CDN)
-// En Vite, los archivos en /public se sirven desde la raíz
+// Configure PDF.js worker once when the module loads
+// Use local worker from the public folder (more reliable than CDN)
+// In Vite, files in /public are served from the root
+// The worker handles PDF parsing in a separate thread for better performance
 pdfjsLib.GlobalWorkerOptions.workerSrc = '/pdf.worker.min.mjs';
 
 const openaiApiKey = import.meta.env.VITE_OPENAI_API_KEY?.trim() || '';
@@ -14,8 +15,15 @@ const openai = openaiApiKey ? new OpenAI({
 }) : null;
 
 /**
- * Detecta chunks que probablemente sean portadas, índices o tablas de contenido.
- * Evita generar embeddings para texto estructural con poca semántica.
+ * Detects chunks that are likely to be covers, indexes, or tables of contents.
+ * Avoids generating embeddings for structural text with little semantic content.
+ * 
+ * This heuristic filters out non-semantic content to improve retrieval quality.
+ * Structural chunks like TOCs and covers can degrade search results by matching
+ * irrelevant queries with high similarity scores.
+ * 
+ * @param chunk - The text chunk to analyze
+ * @returns true if the chunk is likely structural (should be skipped), false otherwise
  */
 function isLikelyStructuralChunk(chunk: string): boolean {
   const text = chunk.trim();
@@ -75,10 +83,21 @@ function isLikelyStructuralChunk(chunk: string): boolean {
 }
 
 /**
- * Procesa un documento específico: extrae texto, crea chunks y genera embeddings
- * @param documentId - ID del documento a procesar
- * @param onProgress - Callback opcional para reportar progreso (0-100)
- * @returns true si se procesó correctamente, false en caso contrario
+ * Processes a specific document: extracts text, creates chunks, and generates embeddings
+ * 
+ * Process flow:
+ * 1. Fetch document metadata from database
+ * 2. Check if document already has chunks (skip if already processed)
+ * 3. Download file from Supabase Storage
+ * 4. Extract text based on file type (PDF, TXT, MD)
+ * 5. Split text into semantic chunks
+ * 6. Filter out structural chunks (covers, TOCs, indexes)
+ * 7. Generate embeddings for each semantic chunk
+ * 8. Save chunks with embeddings to database
+ * 
+ * @param documentId - ID of the document to process
+ * @param onProgress - Optional callback to report progress (0-100)
+ * @returns true if processed successfully, false otherwise
  */
 export async function processDocument(
   documentId: string,
@@ -86,11 +105,12 @@ export async function processDocument(
 ): Promise<boolean> {
   try {
     if (!openai) {
-      console.warn('OpenAI no está configurado, no se pueden procesar documentos');
+      console.warn('OpenAI is not configured, cannot process documents');
       return false;
     }
 
-    // 1. Obtener el documento
+    // Step 1: Get the document from database
+    // Fetch document metadata including file name and storage path
     const { data: doc, error: docError } = await supabase
       .from('documents')
       .select('id, file_name, storage_path')
@@ -98,11 +118,12 @@ export async function processDocument(
       .single();
 
     if (docError || !doc) {
-      console.error(`Error obteniendo documento ${documentId}:`, docError);
+      console.error(`Error fetching document ${documentId}:`, docError);
       return false;
     }
 
-    // 2. Verificar si ya tiene chunks
+    // Step 2: Check if document already has chunks
+    // Skip processing if chunks already exist (idempotent operation)
     const { data: existingChunks } = await supabase
       .from('document_chunks')
       .select('id')
@@ -110,37 +131,41 @@ export async function processDocument(
       .limit(1);
 
     if (existingChunks && existingChunks.length > 0) {
-      console.log(`Documento ${doc.file_name} ya tiene chunks procesados`);
+      console.log(`Document ${doc.file_name} already has processed chunks`);
       onProgress?.(100);
       return true;
     }
 
     onProgress?.(10);
 
-    // 3. Obtener el archivo de Storage
+    // Step 3: Get file from Storage
+    // Determine file extension to handle different file types
     const fileExt = doc.file_name.split('.').pop()?.toLowerCase();
     
+    // Only process supported file formats
     if (!['txt', 'pdf', 'md'].includes(fileExt || '')) {
-      console.log(`Saltando ${doc.file_name}: formato ${fileExt} no soportado`);
+      console.log(`Skipping ${doc.file_name}: format ${fileExt} not supported`);
       return false;
     }
 
+    // Use storage_path if available, otherwise construct path from file name
     const filePath = doc.storage_path || `documents/${doc.file_name}`;
     onProgress?.(20);
 
-    // Obtener el contenido del archivo
+    // Download file content from Supabase Storage
     const { data: fileData, error: downloadError } = await supabase.storage
       .from('documents')
       .download(filePath);
 
     if (downloadError || !fileData) {
-      console.warn(`Error descargando ${doc.file_name}:`, downloadError);
+      console.warn(`Error downloading ${doc.file_name}:`, downloadError);
       return false;
     }
 
     onProgress?.(30);
 
-    // 4. Extraer texto según el tipo de archivo
+    // Step 4: Extract text based on file type
+    // Different extraction methods for PDF vs text files
     let text: string = '';
     
     try {
@@ -168,44 +193,52 @@ export async function processDocument(
         text = await fileData.text();
       }
 
+      // Validate that text was extracted successfully
       if (!text || text.trim().length === 0) {
-        console.warn(`El archivo ${doc.file_name} está vacío o no se pudo extraer texto`);
+        console.warn(`File ${doc.file_name} is empty or text could not be extracted`);
         return false;
       }
 
-      console.log(`✓ Texto extraído de ${doc.file_name}: ${text.length} caracteres`);
+      console.log(`✓ Text extracted from ${doc.file_name}: ${text.length} characters`);
     } catch (extractionError) {
-      console.error(`Error extrayendo texto de ${doc.file_name}:`, extractionError);
+      console.error(`Error extracting text from ${doc.file_name}:`, extractionError);
       return false;
     }
 
     onProgress?.(50);
 
-    // 5. Dividir en chunks inteligentemente
+    // Step 5: Split text into intelligent chunks
+    // Parameters: chunk size 1200 chars, overlap 200 chars
+    // Overlap helps maintain context between chunks
     const chunks = splitIntoChunks(text, 1200, 200);
 
-    // Filtrar chunks estructurales
+    // Filter out structural chunks (covers, TOCs, indexes)
+    // These chunks don't contain semantic content and degrade search quality
     const semanticChunks = chunks.filter(chunk => !isLikelyStructuralChunk(chunk));
     const skippedChunks = chunks.length - semanticChunks.length;
 
     if (skippedChunks > 0) {
-      console.log(`ⓘ Chunks descartados por estructurales para "${doc.file_name}": ${skippedChunks}/${chunks.length}`);
+      console.log(`ⓘ Chunks discarded as structural for "${doc.file_name}": ${skippedChunks}/${chunks.length}`);
     }
 
+    // If all chunks are structural, skip embedding generation
+    // This is not an error - some documents may only contain structural content
     if (semanticChunks.length === 0) {
-      console.warn(`⚠️ Todos los chunks de "${doc.file_name}" parecen estructurales. Se omite generación de embeddings.`);
-      return true; // No es un error, simplemente no hay contenido semántico
+      console.warn(`⚠️ All chunks of "${doc.file_name}" appear to be structural. Skipping embedding generation.`);
+      return true; // Not an error, simply no semantic content
     }
 
     onProgress?.(60);
 
-    // 6. Generar embeddings y guardar chunks
+    // Step 6: Generate embeddings and save chunks
+    // Process each semantic chunk: generate embedding and save to database
     const totalChunks = semanticChunks.length;
     for (let i = 0; i < semanticChunks.length; i++) {
       const chunk = semanticChunks[i];
       
       try {
-        // Generar embedding
+        // Generate embedding vector for this chunk using OpenAI
+        // text-embedding-3-small creates 1536-dimensional vectors
         const embeddingResponse = await openai.embeddings.create({
           model: 'text-embedding-3-small',
           input: chunk,
@@ -213,7 +246,8 @@ export async function processDocument(
 
         const embedding = embeddingResponse.data[0].embedding;
 
-        // Guardar chunk en la base de datos
+        // Save chunk to database with its embedding
+        // The embedding is stored as a vector in PostgreSQL using pgvector extension
         const { error: insertError } = await supabase
           .from('document_chunks')
           .insert({
@@ -224,28 +258,29 @@ export async function processDocument(
           });
 
         if (insertError) {
-          console.error(`❌ Error guardando chunk ${i + 1}/${totalChunks} de ${doc.file_name}:`, insertError);
+          console.error(`❌ Error saving chunk ${i + 1}/${totalChunks} of ${doc.file_name}:`, insertError);
         }
 
-        // Actualizar progreso
+        // Update progress: 60% base + up to 35% for chunk processing
         const progress = 60 + Math.floor((i + 1) / totalChunks * 35);
         onProgress?.(progress);
       } catch (chunkError) {
-        console.error(`Error procesando chunk ${i} de ${doc.file_name}:`, chunkError);
+        console.error(`Error processing chunk ${i} of ${doc.file_name}:`, chunkError);
       }
     }
 
     onProgress?.(95);
 
-    // 7. Verificar que los chunks se guardaron correctamente
+    // Step 7: Verify that chunks were saved correctly
+    // Count chunks with embeddings to confirm successful processing
     const { count: chunksCount } = await supabase
       .from('document_chunks')
       .select('*', { count: 'exact', head: true })
       .eq('document_id', doc.id)
       .not('embedding', 'is', null);
     
-    console.log(`✓✓✓ Documento "${doc.file_name}" procesado exitosamente:`);
-    console.log(`   → Chunks con embeddings guardados: ${chunksCount || 0}`);
+    console.log(`✓✓✓ Document "${doc.file_name}" processed successfully:`);
+    console.log(`   → Chunks with embeddings saved: ${chunksCount || 0}`);
 
     onProgress?.(100);
     return true;
@@ -256,22 +291,29 @@ export async function processDocument(
 }
 
 /**
- * Procesa documentos automáticamente: extrae texto, crea chunks y genera embeddings
- * Soporta archivos TXT, PDF y Markdown (.md)
+ * Automatically processes documents: extracts text, creates chunks, and generates embeddings
+ * Supports TXT, PDF, and Markdown (.md) files
+ * 
+ * This function processes all documents with 'processed' status that don't have chunks yet.
+ * It's designed to be idempotent - documents already processed are skipped.
+ * 
+ * @returns Promise that resolves to true if processing completed, false on error
  */
 export async function processDocumentsAutomatically(): Promise<boolean> {
   try {
     if (!openai) {
-      console.warn('OpenAI no está configurado, no se pueden procesar documentos');
+      console.warn('OpenAI is not configured, cannot process documents');
       return false;
     }
 
-    // 1. Obtener TODOS los documentos procesados (sin límite)
+    // Step 1: Get ALL processed documents (no limit)
+    // Only fetch documents with 'processed' status (ready for chunking)
+    // Order by upload date descending (most recent first)
     const { data: allDocuments, error: docsError } = await supabase
       .from('documents')
       .select('id, file_name, storage_path')
       .eq('status', 'processed')
-      .order('uploaded_at', { ascending: false }); // Más recientes primero
+      .order('uploaded_at', { ascending: false }); // Most recent first
 
     if (docsError || !allDocuments || allDocuments.length === 0) {
       console.log('No hay documentos con status "processed" para procesar');
@@ -280,47 +322,54 @@ export async function processDocumentsAutomatically(): Promise<boolean> {
 
     console.log(`Total de documentos encontrados: ${allDocuments.length}`);
 
-    // 2. Verificar cuáles documentos ya tienen chunks
+    // Step 2: Check which documents already have chunks
+    // Create a set of document IDs that already have chunks to skip them
     const allDocumentIds = allDocuments.map(doc => doc.id);
     const { data: existingChunks } = await supabase
       .from('document_chunks')
       .select('document_id')
       .in('document_id', allDocumentIds);
 
+    // Build set of processed document IDs for fast lookup
     const processedDocIds = new Set(existingChunks?.map(chunk => chunk.document_id) || []);
+    // Filter to only documents that need processing
     const documentsToProcess = allDocuments.filter(doc => !processedDocIds.has(doc.id));
 
-    console.log(`Documentos con chunks: ${processedDocIds.size}`);
-    console.log(`Documentos sin procesar: ${documentsToProcess.length}`);
+    console.log(`Documents with chunks: ${processedDocIds.size}`);
+    console.log(`Documents to process: ${documentsToProcess.length}`);
 
     if (documentsToProcess.length === 0) {
-      console.log('Todos los documentos ya están procesados');
-      return true; // Ya están procesados
+      console.log('All documents are already processed');
+      return true; // Already processed
     }
 
-    console.log(`Documentos a procesar:`, documentsToProcess.map(d => d.file_name));
+    console.log(`Documents to process:`, documentsToProcess.map(d => d.file_name));
 
-    // 3. Procesar cada documento
+    // Step 3: Process each document
+    // Process documents sequentially to avoid overwhelming the API
     for (const doc of documentsToProcess) {
       try {
-        // Obtener el archivo de Storage
+        // Get file from Storage
+        // Determine file extension to handle different file types
         const fileExt = doc.file_name.split('.').pop()?.toLowerCase();
         
-        // Procesar solo archivos soportados: TXT, PDF y Markdown
+        // Only process supported file formats: TXT, PDF, and Markdown
         if (!['txt', 'pdf', 'md'].includes(fileExt || '')) {
-          console.log(`Saltando ${doc.file_name}: formato ${fileExt} no soportado. Solo se procesan TXT, PDF y MD automáticamente`);
+          console.log(`Skipping ${doc.file_name}: format ${fileExt} not supported. Only TXT, PDF, and MD are processed automatically`);
           continue;
         }
 
-        // Buscar el archivo en Storage
+        // Find the file in Storage
         let filePath: string | null = null;
 
-        // Primero intentar usar storage_path si está disponible
+        // First, try to use storage_path if available
+        // storage_path is the most reliable way to locate the file
         if (doc.storage_path) {
           filePath = doc.storage_path;
-          console.log(`Usando storage_path guardado: ${filePath}`);
+          console.log(`Using saved storage_path: ${filePath}`);
         } else {
-          // Si no hay storage_path, buscar el archivo por nombre
+          // If no storage_path, search for file by name
+          // This is a fallback when storage_path is not set
           const { data: allFiles, error: listError } = await supabase.storage
             .from('documents')
             .list('documents', {
@@ -329,137 +378,147 @@ export async function processDocumentsAutomatically(): Promise<boolean> {
             });
 
           if (listError) {
-            console.warn(`Error listando archivos:`, listError);
+            console.warn(`Error listing files:`, listError);
             continue;
           }
 
           if (!allFiles || allFiles.length === 0) {
-            console.warn(`No hay archivos en Storage para buscar`);
+            console.warn(`No files found in Storage to search`);
             continue;
           }
 
-          // Buscar el archivo que coincida con el nombre del documento
+          // Find file that matches the document name
+          // Extract file extension from document name
           const docNameParts = doc.file_name.toLowerCase().split('.');
           const docExt = docNameParts[docNameParts.length - 1]?.toLowerCase();
 
-          // Buscar archivos con la misma extensión
+          // Search for files with the same extension
+          // Match by extension since exact name match may not work
           const filesWithSameExt = allFiles.filter(file => {
             const fileName = file.name.toLowerCase();
             return fileName.endsWith(`.${docExt}`);
           });
 
           if (filesWithSameExt.length === 0) {
-            console.warn(`No se encontró ningún archivo con extensión .${docExt} para ${doc.file_name}`);
-            console.log('Archivos disponibles en Storage:', allFiles.map(f => f.name));
+            console.warn(`No file found with extension .${docExt} for ${doc.file_name}`);
+            console.log('Available files in Storage:', allFiles.map(f => f.name));
             continue;
           }
 
-          // Usar el archivo más reciente con esa extensión
-          // (asumiendo que el último subido es el correcto)
+          // Use the most recent file with that extension
+          // Assumes the last uploaded file is the correct one
           const matchingFile = filesWithSameExt
             .sort((a, b) => {
               const dateA = new Date(a.created_at || a.updated_at || 0).getTime();
               const dateB = new Date(b.created_at || b.updated_at || 0).getTime();
-              return dateB - dateA; // Más reciente primero
+              return dateB - dateA; // Most recent first
             })[0];
 
           if (!matchingFile) {
-            console.warn(`No se pudo determinar el archivo para ${doc.file_name}`);
+            console.warn(`Could not determine file for ${doc.file_name}`);
             continue;
           }
 
           filePath = `documents/${matchingFile.name}`;
-          console.log(`✓ Archivo encontrado: ${filePath} para documento "${doc.file_name}"`);
+          console.log(`✓ File found: ${filePath} for document "${doc.file_name}"`);
         }
 
-        // Obtener el contenido del archivo
+        // Get file content from Storage
         const { data: fileData, error: downloadError } = await supabase.storage
           .from('documents')
           .download(filePath);
 
         if (downloadError || !fileData) {
-          console.warn(`Error descargando ${doc.file_name}:`, downloadError);
+          console.warn(`Error downloading ${doc.file_name}:`, downloadError);
           continue;
         }
 
-        // Extraer texto según el tipo de archivo
+        // Extract text based on file type
+        // Different extraction methods for PDF vs text files
         let text: string = '';
 
         try {
           if (fileExt === 'pdf') {
-            // Procesar PDF usando pdfjs-dist (compatible con navegador)
-            console.log(`Procesando PDF: ${doc.file_name}`);
+            // Process PDF using pdfjs-dist (browser-compatible)
+            console.log(`Processing PDF: ${doc.file_name}`);
             const arrayBuffer = await fileData.arrayBuffer();
             
-            // El worker ya está configurado al inicio del módulo
-            console.log(`Usando worker: ${pdfjsLib.GlobalWorkerOptions.workerSrc}`);
+            // Worker is already configured at module initialization
+            console.log(`Using worker: ${pdfjsLib.GlobalWorkerOptions.workerSrc}`);
             
             try {
-              // Cargar el documento PDF
+              // Load the PDF document
               const loadingTask = pdfjsLib.getDocument({ data: arrayBuffer });
               const pdfDocument = await loadingTask.promise;
               
-              console.log(`PDF tiene ${pdfDocument.numPages} página(s)`);
+              console.log(`PDF has ${pdfDocument.numPages} page(s)`);
               
-              // Extraer texto de todas las páginas
+              // Extract text from all pages
+              // Process each page sequentially to extract text content
               const textParts: string[] = [];
               for (let pageNum = 1; pageNum <= pdfDocument.numPages; pageNum++) {
                 const page = await pdfDocument.getPage(pageNum);
                 const textContent = await page.getTextContent();
+                // Join text items from the page into a single string
                 const pageText = textContent.items
                   .map((item: any) => item.str)
                   .join(' ');
                 textParts.push(pageText);
-                console.log(`✓ Página ${pageNum}/${pdfDocument.numPages} procesada`);
+                console.log(`✓ Page ${pageNum}/${pdfDocument.numPages} processed`);
               }
               
+              // Join all pages with double newlines
               text = textParts.join('\n\n');
             } catch (pdfError) {
-              console.error(`Error procesando PDF ${doc.file_name}:`, pdfError);
+              console.error(`Error processing PDF ${doc.file_name}:`, pdfError);
               throw pdfError;
             }
           } else if (fileExt === 'md' || fileExt === 'txt') {
-            // Procesar Markdown o TXT (ambos son texto plano)
+            // Process Markdown or TXT (both are plain text)
+            // Simply read as text string
             text = await fileData.text();
           } else {
-            console.warn(`Formato no soportado: ${fileExt}`);
+            console.warn(`Format not supported: ${fileExt}`);
             continue;
           }
 
+          // Validate extracted text
           if (!text || text.trim().length === 0) {
-            console.warn(`El archivo ${doc.file_name} está vacío o no se pudo extraer texto`);
+            console.warn(`File ${doc.file_name} is empty or text could not be extracted`);
             continue;
           }
 
-          console.log(`✓ Texto extraído de ${doc.file_name}: ${text.length} caracteres`);
+          console.log(`✓ Text extracted from ${doc.file_name}: ${text.length} characters`);
         } catch (extractionError) {
-          console.error(`Error extrayendo texto de ${doc.file_name}:`, extractionError);
+          console.error(`Error extracting text from ${doc.file_name}:`, extractionError);
           continue;
         }
 
-        // 4. Dividir en chunks inteligentemente (respetando párrafos y oraciones)
-        // Tamaño mayor y overlap más generoso para mantener contexto
+        // Step 4: Split into intelligent chunks (respecting paragraphs and sentences)
+        // Larger chunk size and more generous overlap to maintain context
         const chunks = splitIntoChunks(text, 1200, 200);
 
-        // Filtrar chunks estructurales (índices/portadas/TOC) antes de generar embeddings
+        // Filter structural chunks (indexes/covers/TOC) before generating embeddings
+        // This improves search quality by removing non-semantic content
         const semanticChunks = chunks.filter(chunk => !isLikelyStructuralChunk(chunk));
         const skippedChunks = chunks.length - semanticChunks.length;
 
         if (skippedChunks > 0) {
-          console.log(`ⓘ Chunks descartados por estructurales para "${doc.file_name}": ${skippedChunks}/${chunks.length}`);
+          console.log(`ⓘ Chunks discarded as structural for "${doc.file_name}": ${skippedChunks}/${chunks.length}`);
         }
 
         if (semanticChunks.length === 0) {
-          console.warn(`⚠️ Todos los chunks de "${doc.file_name}" parecen estructurales (portada/índice). Se omite generación de embeddings.`);
+          console.warn(`⚠️ All chunks of "${doc.file_name}" appear to be structural (cover/index). Skipping embedding generation.`);
           continue;
         }
 
-        // 5. Generar embeddings y guardar chunks
+        // Step 5: Generate embeddings and save chunks
+        // Process each semantic chunk sequentially
         for (let i = 0; i < semanticChunks.length; i++) {
           const chunk = semanticChunks[i];
           
           try {
-            // Generar embedding
+            // Generate embedding vector for this chunk
             const embeddingResponse = await openai.embeddings.create({
               model: 'text-embedding-3-small',
               input: chunk,
@@ -467,45 +526,48 @@ export async function processDocumentsAutomatically(): Promise<boolean> {
 
             const embedding = embeddingResponse.data[0].embedding;
 
-            // Guardar chunk en la base de datos
-            // Nota: Supabase/pgvector acepta el array directamente
+            // Save chunk to database
+            // Note: Supabase/pgvector accepts the array directly
             const { error: insertError } = await supabase
               .from('document_chunks')
               .insert({
                 document_id: doc.id,
                 chunk_index: i,
                 content: chunk,
-                embedding: embedding, // Array de números directamente
+                embedding: embedding, // Array of numbers directly
               });
 
             if (insertError) {
-              console.error(`❌ Error guardando chunk ${i + 1}/${chunks.length} de ${doc.file_name}:`, insertError);
-              console.error('Detalles del error:', JSON.stringify(insertError, null, 2));
+              console.error(`❌ Error saving chunk ${i + 1}/${chunks.length} of ${doc.file_name}:`, insertError);
+              console.error('Error details:', JSON.stringify(insertError, null, 2));
             } else {
+              // Log progress every 5 chunks or on last chunk
               if ((i + 1) % 5 === 0 || i === semanticChunks.length - 1) {
-                console.log(`  → Chunk ${i + 1}/${semanticChunks.length} guardado para ${doc.file_name}`);
+                console.log(`  → Chunk ${i + 1}/${semanticChunks.length} saved for ${doc.file_name}`);
               }
             }
           } catch (chunkError) {
-            console.error(`Error procesando chunk ${i} de ${doc.file_name}:`, chunkError);
-            // Continuar con el siguiente chunk
+            console.error(`Error processing chunk ${i} of ${doc.file_name}:`, chunkError);
+            // Continue with next chunk
           }
         }
 
-        // Verificar que los chunks se guardaron correctamente
+        // Verify that chunks were saved correctly
+        // Count chunks with embeddings to confirm successful processing
         const { count: chunksCount } = await supabase
           .from('document_chunks')
           .select('*', { count: 'exact', head: true })
           .eq('document_id', doc.id)
           .not('embedding', 'is', null);
         
-        console.log(`✓✓✓ Documento "${doc.file_name}" procesado exitosamente:`);
-        console.log(`   → Chunks totales detectados: ${chunks.length}`);
-        console.log(`   → Chunks descartados por estructurales: ${skippedChunks}`);
-        console.log(`   → Chunks con embeddings guardados: ${chunksCount || 0}`);
+        console.log(`✓✓✓ Document "${doc.file_name}" processed successfully:`);
+        console.log(`   → Total chunks detected: ${chunks.length}`);
+        console.log(`   → Chunks discarded as structural: ${skippedChunks}`);
+        console.log(`   → Chunks with embeddings saved: ${chunksCount || 0}`);
         
+        // Warn if not all semantic chunks were saved
         if (chunksCount !== semanticChunks.length) {
-          console.warn(`⚠️ Advertencia: Se intentaron crear ${semanticChunks.length} chunks útiles pero solo ${chunksCount} se guardaron correctamente`);
+          console.warn(`⚠️ Warning: Attempted to create ${semanticChunks.length} useful chunks but only ${chunksCount} were saved successfully`);
         }
       } catch (docError) {
         console.error(`Error procesando documento ${doc.file_name}:`, docError);
@@ -521,16 +583,30 @@ export async function processDocumentsAutomatically(): Promise<boolean> {
 }
 
 /**
- * Divide el texto en chunks inteligentemente, respetando párrafos y oraciones
- * para evitar pérdida de información y cortes en medio de palabras
+ * Intelligently splits text into chunks, respecting paragraphs and sentences
+ * to avoid information loss and cuts in the middle of words
+ * 
+ * Strategy:
+ * 1. Normalize line breaks
+ * 2. Split into paragraphs first
+ * 3. For large paragraphs, split into sentences
+ * 4. Build chunks respecting chunk size limits
+ * 5. Use overlap to maintain context between chunks
+ * 
+ * @param text - The text to split into chunks
+ * @param chunkSize - Maximum size of each chunk in characters
+ * @param overlap - Number of characters to overlap between chunks for context
+ * @returns Array of text chunks
  */
 function splitIntoChunks(text: string, chunkSize: number, overlap: number): string[] {
   const chunks: string[] = [];
   
-  // Normalizar saltos de línea
+  // Normalize line breaks
+  // Convert Windows (\r\n) and old Mac (\r) line breaks to Unix (\n)
   const normalizedText = text.replace(/\r\n/g, '\n').replace(/\r/g, '\n');
   
-  // Dividir en párrafos primero (doble salto de línea o salto de línea seguido de espacio)
+  // Split into paragraphs first (double newline or newline followed by space)
+  // Paragraphs are natural semantic units that should be preserved
   const paragraphs = normalizedText.split(/\n\s*\n/).filter(p => p.trim().length > 0);
   
   let currentChunk = '';
@@ -540,31 +616,32 @@ function splitIntoChunks(text: string, chunkSize: number, overlap: number): stri
     const paragraph = paragraphs[i].trim();
     const paragraphSize = paragraph.length;
     
-    // Si el párrafo es muy grande, dividirlo en oraciones
+    // If paragraph is very large, split it into sentences
+    // This prevents creating chunks that are too large
     if (paragraphSize > chunkSize) {
-      // Guardar el chunk actual si existe
+      // Save current chunk if it exists
       if (currentChunk.trim().length > 0) {
         chunks.push(currentChunk.trim());
-        // Iniciar nuevo chunk con overlap del anterior
+        // Start new chunk with overlap from previous
         currentChunk = getOverlapText(currentChunk, overlap);
         currentChunkSize = currentChunk.length;
       }
       
-      // Dividir el párrafo grande en oraciones
+      // Split large paragraph into sentences
       const sentences = splitIntoSentences(paragraph);
       
       for (const sentence of sentences) {
         const sentenceSize = sentence.length;
         
-        // Si agregar esta oración excede el tamaño, guardar chunk actual
+        // If adding this sentence exceeds size, save current chunk
         if (currentChunkSize + sentenceSize + 1 > chunkSize && currentChunk.trim().length > 0) {
           chunks.push(currentChunk.trim());
-          // Iniciar nuevo chunk con overlap
+          // Start new chunk with overlap
           currentChunk = getOverlapText(currentChunk, overlap);
           currentChunkSize = currentChunk.length;
         }
         
-        // Agregar oración al chunk actual
+        // Add sentence to current chunk
         if (currentChunk.length > 0) {
           currentChunk += ' ';
         }
@@ -572,18 +649,18 @@ function splitIntoChunks(text: string, chunkSize: number, overlap: number): stri
         currentChunkSize = currentChunk.length;
       }
     } else {
-      // Párrafo normal: verificar si cabe en el chunk actual
+      // Normal paragraph: check if it fits in current chunk
       const spaceNeeded = currentChunk.length > 0 ? paragraphSize + 2 : paragraphSize;
       
       if (currentChunkSize + spaceNeeded > chunkSize && currentChunk.trim().length > 0) {
-        // Guardar chunk actual y empezar uno nuevo
+        // Save current chunk and start a new one
         chunks.push(currentChunk.trim());
-        // Iniciar nuevo chunk con overlap
+        // Start new chunk with overlap
         currentChunk = getOverlapText(currentChunk, overlap);
         currentChunkSize = currentChunk.length;
       }
       
-      // Agregar párrafo al chunk actual
+      // Add paragraph to current chunk
       if (currentChunk.length > 0) {
         currentChunk += '\n\n';
       }
@@ -592,7 +669,7 @@ function splitIntoChunks(text: string, chunkSize: number, overlap: number): stri
     }
   }
   
-  // Agregar el último chunk si existe
+  // Add the last chunk if it exists
   if (currentChunk.trim().length > 0) {
     chunks.push(currentChunk.trim());
   }
@@ -601,15 +678,19 @@ function splitIntoChunks(text: string, chunkSize: number, overlap: number): stri
 }
 
 /**
- * Divide un texto largo en oraciones, respetando puntos finales
- * Maneja casos especiales como abreviaciones
+ * Splits a long text into sentences, respecting sentence endings
+ * Handles special cases like abbreviations that shouldn't split sentences
+ * 
+ * @param text - The text to split into sentences
+ * @returns Array of sentences
  */
 function splitIntoSentences(text: string): string[] {
-  // Lista de abreviaciones comunes que no deben dividir oraciones
+  // List of common abbreviations that should not split sentences
+  // These abbreviations end with periods but aren't sentence endings
   const abbreviations = ['Sr', 'Sra', 'Srta', 'Dr', 'Dra', 'Prof', 'Ing', 'Lic', 'etc', 'vs', 'p', 'ej', 'pág', 'págs'];
   
-  // Dividir por puntos, signos de exclamación o interrogación seguidos de espacio
-  // y que estén seguidos de mayúscula (inicio de nueva oración)
+  // Split by periods, exclamation marks, or question marks followed by space
+  // and followed by uppercase letter (start of new sentence)
   const sentenceEndings = /([.!?])\s+(?=[A-ZÁÉÍÓÚÑ])/g;
   const sentences: string[] = [];
   let lastIndex = 0;
@@ -618,12 +699,14 @@ function splitIntoSentences(text: string): string[] {
   while ((match = sentenceEndings.exec(text)) !== null) {
     const potentialSentence = text.slice(lastIndex, match.index + 1);
     
-    // Verificar si el punto es parte de una abreviación
+    // Check if the period is part of an abbreviation
+    // Look at the last 10 characters before the period
     const beforePoint = potentialSentence.slice(-10).toLowerCase();
     const isAbbreviation = abbreviations.some(abbr => 
       beforePoint.endsWith(abbr.toLowerCase() + '.')
     );
     
+    // Only split if it's not an abbreviation
     if (!isAbbreviation) {
       const sentence = potentialSentence.trim();
       if (sentence.length > 0) {
@@ -633,15 +716,16 @@ function splitIntoSentences(text: string): string[] {
     }
   }
   
-  // Agregar la última oración
+  // Add the last sentence
   const lastSentence = text.slice(lastIndex).trim();
   if (lastSentence.length > 0) {
     sentences.push(lastSentence);
   }
   
-  // Si no se encontraron oraciones, dividir por tamaño máximo
+  // If no sentences were found, split by maximum size
+  // Fallback for text without clear sentence boundaries
   if (sentences.length === 0) {
-    // Dividir en fragmentos de máximo 800 caracteres en espacios
+    // Split into fragments of maximum 800 characters at spaces
     const maxSize = 800;
     const fragments: string[] = [];
     let currentIndex = 0;
@@ -650,6 +734,8 @@ function splitIntoSentences(text: string): string[] {
       const fragment = text.slice(currentIndex, currentIndex + maxSize);
       const lastSpace = fragment.lastIndexOf(' ');
       
+      // If space is found in second half of fragment, split there
+      // Otherwise, split at maxSize
       if (lastSpace > maxSize * 0.5 && currentIndex + maxSize < text.length) {
         fragments.push(text.slice(currentIndex, currentIndex + lastSpace).trim());
         currentIndex += lastSpace + 1;
@@ -666,36 +752,50 @@ function splitIntoSentences(text: string): string[] {
 }
 
 /**
- * Obtiene el texto de overlap desde el final de un chunk
- * Busca un punto de corte natural (oración o párrafo)
+ * Gets overlap text from the end of a chunk
+ * Searches for a natural cut point (sentence or paragraph boundary)
+ * 
+ * Overlap helps maintain context between chunks by including some text
+ * from the previous chunk at the start of the next chunk.
+ * 
+ * @param chunk - The chunk to extract overlap from
+ * @param overlapSize - Number of characters to include in overlap
+ * @returns Overlap text starting from a natural boundary
  */
 function getOverlapText(chunk: string, overlapSize: number): string {
+  // If chunk is smaller than overlap size, return entire chunk
   if (chunk.length <= overlapSize) {
     return chunk;
   }
   
-  // Tomar los últimos N caracteres
+  // Take the last N characters
   const overlap = chunk.slice(-overlapSize);
   
-  // Intentar encontrar un punto de corte natural
-  // Buscar el primer espacio, punto o salto de línea
+  // Try to find a natural cut point
+  // Prefer newlines, then periods, then spaces
+  // This ensures overlap starts at a semantic boundary
   const firstSpace = overlap.indexOf(' ');
   const firstPeriod = overlap.indexOf('.');
   const firstNewline = overlap.indexOf('\n');
   
   let cutPoint = -1;
+  // Prefer newlines (paragraph boundaries)
   if (firstNewline >= 0) {
     cutPoint = firstNewline + 1;
   } else if (firstPeriod >= 0) {
+    // Then periods (sentence boundaries)
     cutPoint = firstPeriod + 1;
   } else if (firstSpace >= 0) {
+    // Finally spaces (word boundaries)
     cutPoint = firstSpace + 1;
   }
   
+  // If natural boundary found, start overlap from there
   if (cutPoint > 0) {
     return overlap.slice(cutPoint).trim();
   }
   
+  // If no natural boundary, return overlap as-is
   return overlap.trim();
 }
 

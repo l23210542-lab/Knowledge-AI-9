@@ -24,30 +24,45 @@ interface Message extends ChatMessage {
   timestamp: Date;
 }
 
+// Key for storing chat messages in sessionStorage
+// Messages persist during browser session but are cleared when session ends
 const STORAGE_KEY = 'knowledgehub-chat-messages';
 
 export default function Chat() {
+  // Get query parameter from URL (for search from Header or SearchHero)
   const [searchParams] = useSearchParams();
   const initialQuery = searchParams.get("q") || "";
+  
+  // State management for chat messages and UI
   const [messages, setMessages] = useState<Message[]>([]);
   const [input, setInput] = useState(initialQuery);
   const [isTyping, setIsTyping] = useState(false);
   const [showProcessingDialog, setShowProcessingDialog] = useState(false);
+  
+  // Ref for scrolling to bottom of messages
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const { toast } = useToast();
+  
+  // Flag to track initial load and prevent saving during load
   const isInitialLoad = useRef(true);
 
+  /**
+   * Scrolls the messages container to the bottom
+   * Called when new messages are added to keep latest message visible
+   */
   const scrollToBottom = () => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
   };
 
-  // Cargar mensajes desde sessionStorage al montar el componente
+  // Load messages from sessionStorage when component mounts
+  // Restores conversation history from previous session
   useEffect(() => {
     try {
       const savedMessages = sessionStorage.getItem(STORAGE_KEY);
       if (savedMessages) {
         const parsedMessages = JSON.parse(savedMessages);
-        // Convertir timestamps de string a Date
+        // Convert timestamps from string to Date objects
+        // sessionStorage stores dates as strings, need to convert back
         const messagesWithDates = parsedMessages.map((msg: any) => ({
           ...msg,
           timestamp: new Date(msg.timestamp),
@@ -55,20 +70,22 @@ export default function Chat() {
         setMessages(messagesWithDates);
         isInitialLoad.current = false;
       } else {
-        // Si no hay mensajes guardados, marcar que la carga inicial está completa
+        // If no saved messages, mark initial load as complete
         isInitialLoad.current = false;
       }
     } catch (error) {
       console.error('Error loading messages from sessionStorage:', error);
-      // Si hay error, limpiar el storage corrupto
+      // If error, clear corrupted storage
       sessionStorage.removeItem(STORAGE_KEY);
       isInitialLoad.current = false;
     }
   }, []);
 
-  // Guardar mensajes en sessionStorage cada vez que cambien
+  // Save messages to sessionStorage whenever they change
+  // Persists conversation during browser session
   useEffect(() => {
-    // No guardar en el primer render (cuando se cargan desde storage)
+    // Don't save on first render (when loading from storage)
+    // Prevents overwriting loaded messages immediately
     if (isInitialLoad.current) {
       return;
     }
@@ -80,11 +97,14 @@ export default function Chat() {
     }
   }, [messages]);
 
+  // Auto-scroll to bottom when messages change
+  // Keeps latest message visible when new messages arrive
   useEffect(() => {
     scrollToBottom();
   }, [messages]);
 
-  // Procesar initialQuery solo si no hay mensajes cargados desde storage
+  // Process initialQuery only if no messages loaded from storage
+  // Handles search queries from URL parameters (e.g., from Header search)
   useEffect(() => {
     if (initialQuery && messages.length === 0 && !isInitialLoad.current) {
       // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -92,17 +112,25 @@ export default function Chat() {
     }
   }, [initialQuery, messages.length]);
 
+  /**
+   * Handles sending a message to the chat API
+   * Processes user input and gets AI response using RAG
+   * 
+   * @param messageText - Optional message text (if not provided, uses input state)
+   */
   const handleSend = async (messageText?: string) => {
     const text = messageText || input;
     if (!text.trim()) return;
 
-    // Verificar si hay documentos en proceso
+    // Check if documents are currently being processed
+    // Prevent queries while documents are being chunked/embedded
     const isProcessing = await hasDocumentsProcessing();
     if (isProcessing) {
       setShowProcessingDialog(true);
       return;
     }
 
+    // Create user message object
     const userMessage: Message = {
       id: Date.now().toString(),
       role: "user",
@@ -110,21 +138,25 @@ export default function Chat() {
       timestamp: new Date(),
     };
 
+    // Add user message to chat immediately (optimistic update)
     setMessages((prev) => [...prev, userMessage]);
     setInput("");
     setIsTyping(true);
 
     try {
-      // Convertir historial de mensajes al formato esperado por la API
+      // Convert message history to format expected by API
+      // API expects ChatMessage format without id and timestamp
       const conversationHistory: ChatMessage[] = messages.map((msg) => ({
         role: msg.role,
         content: msg.content,
         sources: msg.sources,
       }));
 
-      // Llamar a la API de chat
+      // Call chat API with question and conversation history
+      // API performs RAG search and generates AI response
       const response = await queryChat(text, conversationHistory);
 
+      // Create AI message from API response
       const aiMessage: Message = {
         id: (Date.now() + 1).toString(),
         role: "assistant",
@@ -133,11 +165,13 @@ export default function Chat() {
         timestamp: new Date(),
       };
 
+      // Add AI response to chat
       setMessages((prev) => [...prev, aiMessage]);
     } catch (error) {
       console.error('Error querying chat:', error);
       
-      // Mensaje de error amigable
+      // Friendly error message for user
+      // Provides helpful troubleshooting information
       const errorMessage: Message = {
         id: (Date.now() + 1).toString(),
         role: "assistant",
@@ -157,10 +191,15 @@ export default function Chat() {
     }
   };
 
+  /**
+   * Starts a new chat conversation
+   * Clears all messages and resets the input field
+   */
   const handleNewChat = () => {
     setMessages([]);
     setInput("");
-    // Limpiar sessionStorage al iniciar nueva conversación
+    // Clear sessionStorage when starting new conversation
+    // Ensures fresh start without old messages
     try {
       sessionStorage.removeItem(STORAGE_KEY);
     } catch (error) {
@@ -168,6 +207,12 @@ export default function Chat() {
     }
   };
 
+  /**
+   * Copies message content to clipboard
+   * Provides user feedback via toast notification
+   * 
+   * @param content - The message content to copy
+   */
   const handleCopyMessage = async (content: string) => {
     try {
       await navigator.clipboard.writeText(content);
@@ -185,12 +230,20 @@ export default function Chat() {
     }
   };
 
+  /**
+   * Regenerates an AI message by re-querying with the original user question
+   * Removes the current AI message and all subsequent messages
+   * Useful for getting a different response or fixing errors
+   * 
+   * @param messageId - ID of the AI message to regenerate
+   */
   const handleRefreshMessage = async (messageId: string) => {
-    // Encontrar el mensaje actual y el último mensaje del usuario antes de él
+    // Find the current message and the last user message before it
     const messageIndex = messages.findIndex(msg => msg.id === messageId);
     if (messageIndex === -1) return;
 
-    // Buscar el último mensaje del usuario antes de este mensaje
+    // Search for the last user message before this AI message
+    // Need the original question to regenerate the response
     let lastUserMessage: Message | null = null;
     for (let i = messageIndex - 1; i >= 0; i--) {
       if (messages[i].role === 'user') {
@@ -208,19 +261,21 @@ export default function Chat() {
       return;
     }
 
-    // Verificar si hay documentos en proceso
+    // Check if documents are currently being processed
     const isProcessing = await hasDocumentsProcessing();
     if (isProcessing) {
       setShowProcessingDialog(true);
       return;
     }
 
-    // Remover el mensaje actual y todos los mensajes después de él
+    // Remove current message and all messages after it
+    // This allows regenerating from a specific point in the conversation
     setMessages((prev) => prev.slice(0, messageIndex));
     setIsTyping(true);
 
     try {
-      // Obtener el historial de conversación hasta antes del mensaje a regenerar
+      // Get conversation history up to before the message to regenerate
+      // Exclude the user message that triggered this AI response
       const conversationHistory: ChatMessage[] = messages
         .slice(0, messageIndex - 1)
         .map((msg) => ({
@@ -229,7 +284,8 @@ export default function Chat() {
           sources: msg.sources,
         }));
 
-      // Llamar a la API de chat con la pregunta original
+      // Call chat API with original question
+      // This generates a new response (potentially different due to randomness)
       const response = await queryChat(lastUserMessage.content, conversationHistory);
 
       const aiMessage: Message = {

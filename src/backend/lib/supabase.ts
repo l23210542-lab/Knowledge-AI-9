@@ -1,20 +1,24 @@
 import { createClient } from '@supabase/supabase-js';
 
-// Estas variables deben estar en un archivo .env
+// These variables must be in a .env file
+// VITE_ prefix is required for Vite to expose them to the browser
 const supabaseUrl = import.meta.env.VITE_SUPABASE_URL?.trim() || '';
 const supabaseAnonKey = import.meta.env.VITE_SUPABASE_ANON_KEY?.trim() || '';
 
-// Validar que las credenciales estén presentes
+// Validate that credentials are present
+// Check that values exist and are not placeholder values
 const hasValidCredentials = !!(supabaseUrl && supabaseAnonKey && 
   supabaseUrl !== 'https://placeholder.supabase.co' &&
   supabaseAnonKey !== 'placeholder-key');
 
 if (!hasValidCredentials) {
-  // Intentar detectar la ruta del proyecto para el mensaje de error
-  let envFilePath = '.env (en la raíz del proyecto, mismo nivel que package.json)';
+  // Try to detect project path for error message
+  // Helps user locate the .env file
+  let envFilePath = '.env (in project root, same level as package.json)';
   
   try {
-    // En Node.js podemos obtener la ruta real
+    // In Node.js we can get the real path
+    // This works in build/development environments
     if (typeof process !== 'undefined' && typeof process.cwd === 'function') {
       // eslint-disable-next-line @typescript-eslint/no-var-requires
       const path = require('path');
@@ -22,7 +26,7 @@ if (!hasValidCredentials) {
       envFilePath = path.join(projectRoot, '.env');
     }
   } catch (e) {
-    // Si falla (por ejemplo, en el navegador o módulos no disponibles), usar valor por defecto
+    // If it fails (e.g., in browser or modules not available), use default value
   }
   
   const errorMessage = `
@@ -53,13 +57,15 @@ Debug:
   console.error(errorMessage);
 }
 
-// Crear el cliente de Supabase
-// Si las credenciales están vacías, se usan placeholders para evitar el error de inicialización
+// Create Supabase client
+// If credentials are empty, use placeholders to avoid initialization error
+// This allows the app to start even without proper config (for development)
 export const supabase = createClient(
   supabaseUrl || 'https://placeholder.supabase.co',
   supabaseAnonKey || 'placeholder-key'
 );
 
-// Exportar función para verificar configuración
+// Export function to verify configuration
+// Used by other modules to check if Supabase is properly configured
 export const isSupabaseConfigured = hasValidCredentials;
 

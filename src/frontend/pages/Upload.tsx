@@ -186,8 +186,9 @@ export default function UploadPage() {
           f.id === fileUpload.id ? { ...f, status: "processing", progress: 30 } : f)
       );
 
-      // Subir documento a Supabase (esto ahora también procesa los chunks)
-      // El procesamiento se hace dentro de uploadDocument
+      // Upload document to Supabase (this now also processes chunks)
+      // Processing happens inside uploadDocument function
+      // Document is chunked and embedded immediately after upload
       await uploadDocument(
         fileUpload.file,
         fileUpload.departmentId,
