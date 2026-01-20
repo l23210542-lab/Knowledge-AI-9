@@ -4,7 +4,6 @@
   "devCommand": "npm run dev",
   "installCommand": "npm install",
   "framework": "vite",
-  "nodeVersion": "18.x",
   "rewrites": [
     {
       "source": "/(.*)",
