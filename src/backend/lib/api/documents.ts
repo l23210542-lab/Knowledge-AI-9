@@ -101,25 +101,29 @@ export async function uploadDocument(
       `)
       .single();
 
-    if (insertError) {
-      console.error('Error creating document record:', insertError);
-      // Intentar eliminar el archivo subido si falla la inserción
-      await supabase.storage.from('documents').remove([filePath]);
-      throw insertError;
-    }
-
-    // 3. Procesar el documento (extraer texto, crear chunks, generar embeddings)
-    try {
-      const processed = await processDocument(documentData.id);
-      
-      if (processed) {
-        // Actualizar estado a 'processed' si se procesó correctamente
-        await updateDocumentStatus(documentData.id, 'processed');
-      } else {
-        // Si falla el procesamiento, marcar como error
-        await updateDocumentStatus(documentData.id, 'error');
-        throw new Error('Error al procesar el documento');
+      if (insertError) {
+        console.error('Error creating document record:', insertError);
+        // Try to delete uploaded file if insertion fails
+        // Clean up storage to avoid orphaned files
+        await supabase.storage.from('documents').remove([filePath]);
+        throw insertError;
       }
+
+      // Step 3: Process the document (extract text, create chunks, generate embeddings)
+      // This happens immediately after upload to enable search right away
+      try {
+        const processed = await processDocument(documentData.id);
+        
+        if (processed) {
+          // Update status to 'processed' if processing succeeded
+          // Document is now ready for search queries
+          await updateDocumentStatus(documentData.id, 'processed');
+        } else {
+          // If processing fails, mark as error
+          // Document will not be searchable but record exists
+          await updateDocumentStatus(documentData.id, 'error');
+          throw new Error('Error al procesar el documento');
+        }
     } catch (processError) {
       console.error('Error processing document:', processError);
       await updateDocumentStatus(documentData.id, 'error');

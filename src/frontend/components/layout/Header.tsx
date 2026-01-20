@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { useNavigate } from "react-router-dom";
 import { Search, User } from "lucide-react";
 import { Input } from "@/components/ui/input";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
@@ -10,10 +11,17 @@ interface HeaderProps {
 
 export function Header({ onSearch }: HeaderProps) {
   const [searchQuery, setSearchQuery] = useState("");
+  const navigate = useNavigate();
 
   const handleSearch = (e: React.FormEvent) => {
     e.preventDefault();
-    onSearch?.(searchQuery);
+    const trimmedQuery = searchQuery.trim();
+    
+    if (trimmedQuery) {
+      onSearch?.(trimmedQuery);
+      navigate(`/chat?q=${encodeURIComponent(trimmedQuery)}`);
+      setSearchQuery("");
+    }
   };
 
   return (
